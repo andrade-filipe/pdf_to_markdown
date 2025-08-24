@@ -73,8 +73,18 @@ Exemplos de uso:
         print(f"📁 Diretório de saída: {args.output_dir}")
         
         if args.verbose:
+            stats = pipeline.get_statistics()
             print(f"\n📊 Estatísticas:")
-            print(f"   - Páginas processadas: {pipeline.get_statistics({})}")
+            print(f"   - Páginas processadas: {stats['total_pages']}")
+            print(f"   - Blocos de texto: {stats['text_blocks']}")
+            print(f"   - Tabelas extraídas: {stats['tables']}")
+            print(f"   - Imagens extraídas: {stats['images']}")
+            print(f"   - Entradas de fonte: {stats['font_info_entries']}")
+            print(f"   - Tamanho texto bruto: {stats['raw_text_length']:,} chars")
+            print(f"   - Tamanho texto limpo: {stats['cleaned_text_length']:,} chars")
+            print(f"   - Tamanho Markdown: {stats['markdown_length']:,} chars")
+            print(f"   - Linhas Markdown: {stats['markdown_lines']}")
+            print(f"   - Método escolhido: {stats['method_chosen']}")
         
     except Exception as e:
         print(f"❌ Erro durante a conversão: {e}")
