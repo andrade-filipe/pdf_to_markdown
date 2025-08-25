@@ -9,6 +9,7 @@ from .steps.cleanup_step import CleanupStep
 from .steps.image_extraction_step import ImageExtractionStep
 from .steps.markdown_conversion_step import MarkdownConversionStep
 from .steps.advanced_markdown_conversion_step import AdvancedMarkdownConversionStep
+from .steps.spell_checking_step import SpellCheckingStep
 
 
 class ConversionPipeline:
@@ -25,7 +26,8 @@ class ConversionPipeline:
             CleanupStep(),
             ImageExtractionStep(str(self.output_dir)),
             MarkdownConversionStep(),
-            AdvancedMarkdownConversionStep()
+            AdvancedMarkdownConversionStep(),
+            SpellCheckingStep()
         ]
         
         # Dados da conversão atual

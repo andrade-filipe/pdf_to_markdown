@@ -17,3 +17,7 @@ class BaseStep(ABC):
     
     def __str__(self):
         return f"Step: {self.name}"
+    
+    def log_info(self, message: str):
+        """Log de informações do passo"""
+        print(f"[{self.name}] {message}")
