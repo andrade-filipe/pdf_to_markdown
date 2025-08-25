@@ -1,0 +1,92 @@
+"""Passo de extração de texto do PDF"""
+
+import fitz  # PyMuPDF
+from typing import Dict, Any, List
+from .base_step import BaseStep
+
+
+class TextExtractionStep(BaseStep):
+    """Passo responsável por extrair texto do PDF com informações de fonte"""
+    
+    def __init__(self):
+        super().__init__("TextExtraction")
+    
+    def process(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Extrai texto do PDF com informações de fonte e posição"""
+        pdf_path = data.get('pdf_path')
+        if not pdf_path:
+            raise ValueError("pdf_path é obrigatório")
+        
+        # Abrir o PDF
+        doc = fitz.open(pdf_path)
+        extracted_data = {
+            'text_blocks': [],
+            'font_info': [],
+            'total_pages': len(doc),
+            'raw_text': ""
+        }
+        
+        for page_num in range(len(doc)):
+            page = doc[page_num]
+            
+            # Tentar diferentes métodos de extração
+            page_text = ""
+            
+            # Método 1: Extração simples
+            try:
+                page_text = page.get_text()
+            except:
+                pass
+            
+            # Método 2: Extração com HTML (às vezes funciona melhor)
+            if not page_text.strip():
+                try:
+                    page_text = page.get_text("html")
+                    # Limpar tags HTML
+                    import re
+                    page_text = re.sub(r'<[^>]+>', '', page_text)
+                except:
+                    pass
+            
+            # Método 3: Extração por blocos
+            if not page_text.strip():
+                try:
+                    blocks = page.get_text("dict")
+                    page_text = ""
+                    for block in blocks.get("blocks", []):
+                        if "lines" in block:
+                            for line in block["lines"]:
+                                for span in line["spans"]:
+                                    page_text += span['text'] + " "
+                except:
+                    pass
+            
+            if page_text.strip():
+                extracted_data['raw_text'] += page_text + "\n\n"
+            
+            # Extrair informações de fonte para detecção de títulos
+            try:
+                blocks = page.get_text("dict")
+                for block in blocks.get("blocks", []):
+                    if "lines" in block:
+                        for line in block["lines"]:
+                            for span in line["spans"]:
+                                # Filtrar texto muito pequeno ou vazio
+                                if len(span['text'].strip()) > 0 and span['size'] > 6:
+                                    font_info = {
+                                        'text': span['text'],
+                                        'tamanho': span['size'],
+                                        'posicao': (span['bbox'][0], span['bbox'][1]),
+                                        'pagina': page_num + 1,
+                                        'fonte': span['font']
+                                    }
+                                    extracted_data['font_info'].append(font_info)
+                                    extracted_data['text_blocks'].append(span['text'])
+            except:
+                pass
+        
+        doc.close()
+        
+        # Adicionar dados extraídos ao contexto
+        data.update(extracted_data)
+        return data
