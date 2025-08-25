@@ -13,6 +13,10 @@ class AdvancedMarkdownConversionStep(BaseStep):
     
     def process(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Processa o conteúdo com múltiplos métodos e escolhe o melhor"""
+        # Pular processamento se for relatório Quantum (já tem etapa específica)
+        if data.get('document_type') == 'quantum_report':
+            return data
+            
         markdown_content = data.get('markdown_content', '')
         if not markdown_content:
             return data

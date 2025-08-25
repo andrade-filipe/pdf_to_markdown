@@ -12,8 +12,10 @@ from .steps.text_extraction_step import TextExtractionStep
 from .steps.table_extraction_step import TableExtractionStep
 from .steps.cleanup_step import CleanupStep
 from .steps.image_extraction_step import ImageExtractionStep
+from .steps.document_type_detection_step import DocumentTypeDetectionStep
 from .steps.markdown_conversion_step import MarkdownConversionStep
 from .steps.advanced_markdown_conversion_step import AdvancedMarkdownConversionStep
+from .steps.quantum_report_conversion_step import QuantumReportConversionStep
 from .steps.spell_checking_step import SpellCheckingStep
 
 
@@ -27,11 +29,13 @@ class ConversionPipeline:
         # Inicializar passos do pipeline
         self.steps = [
             TextExtractionStep(),
+            DocumentTypeDetectionStep(),
             TableExtractionStep(),
             CleanupStep(),
             ImageExtractionStep(str(self.output_dir)),
             MarkdownConversionStep(),
             AdvancedMarkdownConversionStep(),
+            QuantumReportConversionStep(),
             SpellCheckingStep()
         ]
         

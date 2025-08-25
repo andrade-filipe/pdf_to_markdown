@@ -14,6 +14,10 @@ class MarkdownConversionStep(BaseStep):
     
     def process(self, data: Dict[str, Any]) -> Dict[str, Any]:
         """Converte dados extraídos para formato Markdown"""
+        # Pular processamento se for relatório Quantum (já tem etapa específica)
+        if data.get('document_type') == 'quantum_report':
+            return data
+            
         markdown_content = []
         
         # Processar informações de fonte para detectar títulos (prioridade)
