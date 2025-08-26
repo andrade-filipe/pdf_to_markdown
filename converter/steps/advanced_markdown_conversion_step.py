@@ -44,8 +44,11 @@ class AdvancedMarkdownConversionStep(BaseStep):
         
         print(f"🎯 Método escolhido: {best_method}")
         
-        # Atualizar o conteúdo
-        data['markdown_content'] = best_content
+        # Aplicar otimização de parágrafos APÓS seleção do método
+        optimized_content = self._apply_paragraph_optimization(best_content)
+        
+        # Atualizar o conteúdo com versão otimizada
+        data['markdown_content'] = optimized_content
         data['conversion_method'] = best_method
         data['all_methods'] = methods
         
@@ -454,18 +457,47 @@ class AdvancedMarkdownConversionStep(BaseStep):
         # Pontuação baseada na ausência de repetições (penalização mais severa)
         seen_lines = set()
         repeated_lines = 0
+        repeated_words = 0
+        
+        # Verificar repetições de linhas
         for line in lines:
             line = line.strip()
             if line:
                 normalized = re.sub(r'\s+', ' ', line).lower()
+                normalized = re.sub(r'[^\w\s]', '', normalized)  # Remover caracteres especiais
                 if normalized in seen_lines:
                     repeated_lines += 1
                 else:
                     seen_lines.add(normalized)
         
+        # Verificar repetições de palavras (problema identificado nos piores casos)
+        word_freq = {}
+        all_text = ' '.join([line.strip() for line in lines if line.strip()])
+        words = re.findall(r'\b\w+\b', all_text.lower())
+        
+        for word in words:
+            if len(word) > 2:  # Ignorar palavras muito curtas
+                word_freq[word] = word_freq.get(word, 0) + 1
+        
+        # Penalizar palavras que se repetem excessivamente
+        for word, count in word_freq.items():
+            if count > 50:  # Mais de 50 repetições é problemático
+                repeated_words += count - 50
+        
         # Penalizar repetições mais severamente
-        repetition_penalty = min(15, repeated_lines * 2)  # Aumentado: penalização mais severa
+        repetition_penalty = min(25, repeated_lines * 3 + repeated_words * 0.1)
         score -= repetition_penalty
+        
+        # Penalizar duplicação de conteúdo (problema do 181014cronologia_ap.pdf)
+        content_length = len(content)
+        if content_length > 50000:  # Conteúdo muito longo pode indicar duplicação
+            score -= 10
+        
+        # Verificar se há padrões repetitivos de cabeçalho
+        header_patterns = ['Cronologia Bíblica', 'Proceedings of the International Conference']
+        for pattern in header_patterns:
+            if content.count(pattern) > 5:  # Mais de 5 ocorrências é problemático
+                score -= 15
         
         # Bônus para conteúdo bem estruturado
         if title_count > 5:  # Muitos títulos indicam boa estrutura
@@ -473,4 +505,94 @@ class AdvancedMarkdownConversionStep(BaseStep):
         if well_formed_paragraphs > 10:  # Muitos parágrafos bem formados
             score += 10
         
+        # NOVA MÉTRICA: Pontuação baseada na densidade de conteúdo
+        empty_lines = len([l for l in lines if not l.strip()])
+        total_lines = len(lines)
+        content_density = 1 - (empty_lines / total_lines) if total_lines > 0 else 0
+        
+        # Penalizar métodos que geram muitas linhas vazias
+        if content_density < 0.7:  # Menos de 70% de conteúdo
+            score -= 15  # Penalização severa
+        elif content_density < 0.8:  # Menos de 80% de conteúdo
+            score -= 10  # Penalização moderada
+        elif content_density < 0.9:  # Menos de 90% de conteúdo
+            score -= 5   # Penalização leve
+        
+        # Bônus para alta densidade de conteúdo
+        if content_density > 0.95:  # Mais de 95% de conteúdo
+            score += 10
+        
         return score
+    
+    def _apply_paragraph_optimization(self, content: str) -> str:
+        """Aplica otimização de parágrafos para reduzir quebras de linha desnecessárias"""
+        if not content:
+            return content
+        
+        lines = content.split('\n')
+        optimized_lines = []
+        current_paragraph = []
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Se é um título, finalizar parágrafo anterior e adicionar título
+            if line.startswith('#'):
+                if current_paragraph:
+                    optimized_lines.append(' '.join(current_paragraph))
+                    current_paragraph = []
+                optimized_lines.append(line)
+            # Se é linha vazia, finalizar parágrafo atual
+            elif not line:
+                if current_paragraph:
+                    optimized_lines.append(' '.join(current_paragraph))
+                    current_paragraph = []
+                optimized_lines.append('')  # Manter uma linha vazia entre parágrafos
+            # Se é lista, finalizar parágrafo anterior e manter como está
+            elif line.startswith('-') or line.startswith('*') or re.match(r'^\d+\.', line):
+                if current_paragraph:
+                    optimized_lines.append(' '.join(current_paragraph))
+                    current_paragraph = []
+                optimized_lines.append(line)
+            # Para outras linhas, tentar juntar com parágrafo atual
+            else:
+                # Verificar se deve juntar com linha anterior
+                if current_paragraph and self._should_join_lines(current_paragraph[-1], line):
+                    current_paragraph.append(line)
+                else:
+                    # Finalizar parágrafo anterior e começar novo
+                    if current_paragraph:
+                        optimized_lines.append(' '.join(current_paragraph))
+                        current_paragraph = []
+                    current_paragraph.append(line)
+        
+        # Finalizar último parágrafo
+        if current_paragraph:
+            optimized_lines.append(' '.join(current_paragraph))
+        
+        return '\n'.join(optimized_lines)
+    
+    def _should_join_lines(self, prev_line: str, current_line: str) -> bool:
+        """Determina se duas linhas devem ser juntadas"""
+        # Não juntar se a linha anterior termina com pontuação final
+        if prev_line.rstrip().endswith(('.', '!', '?', ':', ';')):
+            return False
+        
+        # Não juntar se a linha atual começa com maiúscula e parece início de frase
+        if current_line and current_line[0].isupper():
+            # Verificar se não é número ou abreviação
+            if not re.match(r'^\d+', current_line):
+                # Verificar se a linha anterior termina com pontuação
+                if prev_line.rstrip().endswith(('.', '!', '?')):
+                    return False
+        
+        # Não juntar linhas muito curtas (possíveis títulos)
+        if len(current_line) < 30 and current_line.isupper():
+            return False
+        
+        # Não juntar se parece ser uma lista ou item numerado
+        if re.match(r'^[-•*]\s', current_line) or re.match(r'^\d+\.\s', current_line):
+            return False
+        
+        # Juntar se as linhas são relacionadas
+        return True

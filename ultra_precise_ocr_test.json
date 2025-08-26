@@ -1,0 +1,50 @@
+{
+  "181014cronologia_ap.pdf": {
+    "analysis": {
+      "total_lines": 1043,
+      "non_empty_lines": 522,
+      "empty_lines": 521,
+      "headers": 261,
+      "sections": 261,
+      "lists": 0,
+      "code_blocks": 0,
+      "repeated_lines": 0,
+      "avg_line_length": 51.73180076628353,
+      "markdown_score": 75,
+      "structure_quality": "Boa"
+    },
+    "ocr_applied": false,
+    "ocr_pages": 0,
+    "conversion_time": 9.797550678253174,
+    "content_length": 28046,
+    "improvements": {
+      "markdown_improvement": 0,
+      "headers_improvement": 0,
+      "repetitions_reduction": 0
+    }
+  },
+  "coming-to-grips-with-genesis-ch6.pdf": {
+    "analysis": {
+      "total_lines": 4539,
+      "non_empty_lines": 2270,
+      "empty_lines": 2269,
+      "headers": 6,
+      "sections": 7,
+      "lists": 18,
+      "code_blocks": 0,
+      "repeated_lines": 396,
+      "avg_line_length": 40.94757709251101,
+      "markdown_score": 95,
+      "structure_quality": "Excelente"
+    },
+    "ocr_applied": true,
+    "ocr_pages": 10,
+    "conversion_time": 4.109046697616577,
+    "content_length": 97489,
+    "improvements": {
+      "markdown_improvement": 0,
+      "headers_improvement": 0,
+      "repetitions_reduction": 0
+    }
+  }
+}

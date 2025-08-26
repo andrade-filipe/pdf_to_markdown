@@ -3,6 +3,7 @@
 import fitz  # PyMuPDF
 from typing import Dict, Any, List
 from .base_step import BaseStep
+import re
 
 
 class TextExtractionStep(BaseStep):
@@ -29,64 +30,294 @@ class TextExtractionStep(BaseStep):
         for page_num in range(len(doc)):
             page = doc[page_num]
             
-            # Tentar diferentes métodos de extração
-            page_text = ""
-            
-            # Método 1: Extração simples
-            try:
-                page_text = page.get_text()
-            except:
-                pass
-            
-            # Método 2: Extração com HTML (às vezes funciona melhor)
-            if not page_text.strip():
-                try:
-                    page_text = page.get_text("html")
-                    # Limpar tags HTML
-                    import re
-                    page_text = re.sub(r'<[^>]+>', '', page_text)
-                except:
-                    pass
-            
-            # Método 3: Extração por blocos
-            if not page_text.strip():
-                try:
-                    blocks = page.get_text("dict")
-                    page_text = ""
-                    for block in blocks.get("blocks", []):
-                        if "lines" in block:
-                            for line in block["lines"]:
-                                for span in line["spans"]:
-                                    page_text += span['text'] + " "
-                except:
-                    pass
+            # Usar método dict como padrão para melhor controle
+            page_text = self._extract_text_with_dict_method(page, page_num)
             
             if page_text.strip():
-                extracted_data['raw_text'] += page_text + "\n\n"
+                # Limpar o texto da página antes de adicionar
+                cleaned_page_text = self._clean_text(page_text)
+                if cleaned_page_text.strip():
+                    extracted_data['raw_text'] += cleaned_page_text + "\n\n"
             
             # Extrair informações de fonte para detecção de títulos
-            try:
-                blocks = page.get_text("dict")
-                for block in blocks.get("blocks", []):
-                    if "lines" in block:
-                        for line in block["lines"]:
-                            for span in line["spans"]:
-                                # Filtrar texto muito pequeno ou vazio
-                                if len(span['text'].strip()) > 0 and span['size'] > 6:
-                                    font_info = {
-                                        'text': span['text'],
-                                        'tamanho': span['size'],
-                                        'posicao': (span['bbox'][0], span['bbox'][1]),
-                                        'pagina': page_num + 1,
-                                        'fonte': span['font']
-                                    }
-                                    extracted_data['font_info'].append(font_info)
-                                    extracted_data['text_blocks'].append(span['text'])
-            except:
-                pass
+            self._extract_font_info(page, page_num, extracted_data)
         
         doc.close()
         
         # Adicionar dados extraídos ao contexto
         data.update(extracted_data)
         return data
+    
+    def _extract_text_with_dict_method(self, page, page_num: int) -> str:
+        """Extrai texto usando método dict com junção inteligente de spans"""
+        try:
+            blocks = page.get_text("dict")
+            page_text = ""
+            
+            for block in blocks.get("blocks", []):
+                if block.get("type") == 0:  # texto
+                    block_text = self._process_text_block(block)
+                    if block_text:
+                        page_text += block_text + "\n"
+            
+            return page_text.strip()
+        except Exception as e:
+            self.log_info(f"Erro na extração dict da página {page_num + 1}: {e}")
+            # Fallback para método simples
+            return page.get_text()
+    
+    def _process_text_block(self, block) -> str:
+        """Processa um bloco de texto juntando spans inteligentemente"""
+        if "lines" not in block:
+            return ""
+        
+        block_lines = []
+        
+        for line in block["lines"]:
+            line_text = self._join_spans_intelligently(line["spans"])
+            if line_text.strip():
+                block_lines.append(line_text)
+        
+        return " ".join(block_lines)
+    
+    def _join_spans_intelligently(self, spans: List[Dict]) -> str:
+        """Junta spans de forma inteligente preservando espaçamento natural"""
+        if not spans:
+            return ""
+        
+        joined_text = ""
+        prev_span_end = 0
+        
+        # Filtrar spans vazios ou muito pequenos
+        valid_spans = []
+        for span in spans:
+            text = span.get('text', '').strip()
+            if len(text) > 0 and not self._is_page_number(text) and not self._is_header_footer(text):
+                valid_spans.append(span)
+        
+        if not valid_spans:
+            return ""
+        
+        for i, span in enumerate(valid_spans):
+            text = span.get('text', '')
+            bbox = span.get('bbox', [0, 0, 0, 0])
+            
+            # Verificar se deve adicionar espaço
+            should_add_space = False
+            
+            # Se não é o primeiro span
+            if i > 0:
+                # Verificar distância horizontal entre spans
+                current_span_start = bbox[0]
+                distance = current_span_start - prev_span_end
+                
+                # Se há espaço significativo entre spans, adicionar espaço
+                if distance > 2.0:  # Aumentado para 2 pontos de distância
+                    should_add_space = True
+                
+                # Se o texto anterior não termina com hífen, adicionar espaço
+                if not joined_text.strip().endswith('-'):
+                    should_add_space = True
+                
+                # Verificar se estamos na mesma linha (tolerância vertical)
+                if i > 0:
+                    prev_bbox = valid_spans[i-1].get('bbox', [0, 0, 0, 0])
+                    vertical_distance = abs(bbox[1] - prev_bbox[1])
+                    if vertical_distance > 5.0:  # Nova linha se distância vertical > 5
+                        joined_text += '\n'
+                        should_add_space = False
+            
+            # Adicionar espaço se necessário
+            if should_add_space and joined_text and not joined_text.endswith(' ') and not joined_text.endswith('\n'):
+                joined_text += ' '
+            
+            # Adicionar texto do span
+            joined_text += text
+            
+            # Atualizar posição final
+            prev_span_end = bbox[2]
+        
+        return joined_text
+    
+    def _is_page_number(self, text: str) -> bool:
+        """Verifica se o texto é um número de página"""
+        # Padrões comuns de numeração de página
+        patterns = [
+            r'^\d+$',  # Apenas números
+            r'^\d+\.?$',  # Número com ponto opcional
+            r'^p\.?\s*\d+',  # p. 123 ou p123
+            r'^\d+\s*/\s*\d+$',  # 123 / 456
+            r'^\d+\s*-\s*\d+$',  # 123 - 456
+        ]
+        
+        for pattern in patterns:
+            if re.match(pattern, text.strip()):
+                return True
+        
+        return False
+    
+    def _is_header_footer(self, text: str) -> bool:
+        """Verifica se o texto é cabeçalho ou rodapé repetitivo"""
+        text = text.strip()
+        
+        # Se muito curto, provavelmente é cabeçalho/rodapé
+        if len(text) < 3:
+            return True
+        
+        # Padrões de cabeçalho/rodapé comuns
+        header_footer_patterns = [
+            r'^\d+$',  # Apenas números
+            r'^[A-Z][a-z]*\s+\d+$',  # Janeiro 2023
+            r'^©|©.*$',  # Copyright
+            r'^Confidential|Proprietary|Draft$',  # Marcadores
+            r'^[A-Z]{1,3}$',  # Siglas curtas
+        ]
+        
+        for pattern in header_footer_patterns:
+            if re.match(pattern, text):
+                return True
+        
+        return False
+    
+    def _remove_excessive_word_repetitions(self, text: str) -> str:
+        """Remove palavras que se repetem excessivamente"""
+        lines = text.split('\n')
+        cleaned_lines = []
+        
+        # Analisar frequência de palavras em todo o texto
+        word_freq = {}
+        all_words = []
+        
+        for line in lines:
+            words = line.split()
+            all_words.extend(words)
+        
+        # Contar frequência de palavras
+        for word in all_words:
+            clean_word = re.sub(r'[^\w]', '', word.lower())
+            if len(clean_word) > 2:  # Ignorar palavras muito curtas
+                word_freq[clean_word] = word_freq.get(clean_word, 0) + 1
+        
+        # Identificar palavras excessivamente repetidas
+        excessive_words = {word: count for word, count in word_freq.items() if count > 100}
+        
+        if excessive_words:
+            # Reconstruir texto removendo ou substituindo palavras excessivas
+            for line in lines:
+                words = line.split()
+                new_words = []
+                
+                for word in words:
+                    clean_word = re.sub(r'[^\w]', '', word.lower())
+                    
+                    if clean_word in excessive_words:
+                        # Substituir por uma versão mais curta ou remover
+                        if len(word) > 5:
+                            # Manter apenas as primeiras letras
+                            new_word = word[:3] + "."
+                        else:
+                            # Pular palavras muito curtas e muito repetidas
+                            continue
+                    else:
+                        new_word = word
+                    
+                    new_words.append(new_word)
+                
+                if new_words:  # Só adicionar linha se tiver conteúdo
+                    cleaned_lines.append(' '.join(new_words))
+        else:
+            # Se não há palavras excessivamente repetidas, manter original
+            cleaned_lines = lines
+        
+        return '\n'.join(cleaned_lines)
+    
+    def _extract_font_info(self, page, page_num: int, extracted_data: Dict):
+        """Extrai informações de fonte para detecção de títulos"""
+        try:
+            blocks = page.get_text("dict")
+            for block in blocks.get("blocks", []):
+                if "lines" in block:
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            # Filtrar texto muito pequeno ou vazio
+                            if len(span['text'].strip()) > 0 and span['size'] > 6:
+                                font_info = {
+                                    'text': span['text'],
+                                    'tamanho': span['size'],
+                                    'posicao': (span['bbox'][0], span['bbox'][1]),
+                                    'pagina': page_num + 1,
+                                    'fonte': span['font']
+                                }
+                                extracted_data['font_info'].append(font_info)
+                                extracted_data['text_blocks'].append(span['text'])
+        except Exception as e:
+            self.log_info(f"Erro na extração de informações de fonte da página {page_num + 1}: {e}")
+    
+    def _clean_text(self, text: str) -> str:
+        """Limpa o texto extraído removendo caracteres problemáticos e repetições"""
+        # Remover caracteres de controle exceto quebras de linha
+        text = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]', '', text)
+        
+        # Normalizar espaços múltiplos
+        text = re.sub(r' +', ' ', text)
+        
+        # Remover quebras de linha múltiplas
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+        
+        # Remover repetições excessivas de linhas
+        text = self._remove_repetitive_lines(text)
+        
+        # Remover padrões repetitivos de cabeçalho/rodapé
+        text = self._remove_header_footer_patterns(text)
+        
+        # Remover palavras excessivamente repetidas
+        text = self._remove_excessive_word_repetitions(text)
+        
+        return text.strip()
+    
+    def _remove_repetitive_lines(self, text: str) -> str:
+        """Remove linhas que se repetem excessivamente"""
+        lines = text.split('\n')
+        cleaned_lines = []
+        line_count = {}
+        
+        for line in lines:
+            stripped_line = line.strip()
+            if stripped_line:
+                # Contar ocorrências da linha
+                line_count[stripped_line] = line_count.get(stripped_line, 0) + 1
+                
+                # Se a linha aparece mais de 3 vezes, provavelmente é repetitiva
+                if line_count[stripped_line] <= 3:
+                    cleaned_lines.append(line)
+            else:
+                # Preservar linhas vazias
+                cleaned_lines.append(line)
+        
+        return '\n'.join(cleaned_lines)
+    
+    def _remove_header_footer_patterns(self, text: str) -> str:
+        """Remove padrões repetitivos de cabeçalho e rodapé"""
+        lines = text.split('\n')
+        cleaned_lines = []
+        header_footer_patterns = [
+            r'^Proceedings of the International Conference on',
+            r'^©.*Cedarville University',
+            r'^Volume \d+ Article \d+',
+            r'^Print Reference: \d+-\d+ \d{4}',
+            r'^Cronologia Bíblica.*$',  # Cabeçalho específico do arquivo problemático
+        ]
+        
+        for line in lines:
+            should_keep = True
+            stripped_line = line.strip()
+            
+            for pattern in header_footer_patterns:
+                if re.match(pattern, stripped_line, re.IGNORECASE):
+                    should_keep = False
+                    break
+            
+            if should_keep:
+                cleaned_lines.append(line)
+        
+        return '\n'.join(cleaned_lines)

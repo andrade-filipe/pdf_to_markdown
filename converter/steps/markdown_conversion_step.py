@@ -52,7 +52,7 @@ class MarkdownConversionStep(BaseStep):
         # Juntar todo o conteúdo
         final_markdown = '\n\n'.join(markdown_content)
         
-        # Adicionar markdown final ao contexto
+        # Adicionar markdown final ao contexto (otimização será aplicada no AdvancedMarkdownConversionStep)
         data['markdown_content'] = final_markdown
         return data
     
@@ -167,3 +167,74 @@ class MarkdownConversionStep(BaseStep):
                 return True
         
         return False
+    
+    def _optimize_paragraphs(self, markdown_content: str) -> str:
+        """Otimiza parágrafos reduzindo quebras de linha desnecessárias"""
+        if not markdown_content:
+            return markdown_content
+        
+        lines = markdown_content.split('\n')
+        optimized_lines = []
+        current_paragraph = []
+        
+        for line in lines:
+            line = line.strip()
+            
+            # Se é um título, finalizar parágrafo anterior e adicionar título
+            if line.startswith('#'):
+                if current_paragraph:
+                    optimized_lines.append(' '.join(current_paragraph))
+                    current_paragraph = []
+                optimized_lines.append(line)
+            # Se é linha vazia, finalizar parágrafo atual
+            elif not line:
+                if current_paragraph:
+                    optimized_lines.append(' '.join(current_paragraph))
+                    current_paragraph = []
+                optimized_lines.append('')  # Manter uma linha vazia
+            # Se é lista, finalizar parágrafo anterior e manter como está
+            elif line.startswith('-') or line.startswith('*') or re.match(r'^\d+\.', line):
+                if current_paragraph:
+                    optimized_lines.append(' '.join(current_paragraph))
+                    current_paragraph = []
+                optimized_lines.append(line)
+            # Para outras linhas, tentar juntar com parágrafo atual
+            else:
+                # Verificar se deve juntar com linha anterior
+                if current_paragraph and self._should_join_lines(current_paragraph[-1], line):
+                    current_paragraph.append(line)
+                else:
+                    # Finalizar parágrafo anterior e começar novo
+                    if current_paragraph:
+                        optimized_lines.append(' '.join(current_paragraph))
+                        current_paragraph = []
+                    current_paragraph.append(line)
+        
+        # Finalizar último parágrafo
+        if current_paragraph:
+            optimized_lines.append(' '.join(current_paragraph))
+        
+        return '\n'.join(optimized_lines)
+    
+    def _should_join_lines(self, prev_line: str, current_line: str) -> bool:
+        """Determina se duas linhas devem ser juntadas"""
+        # Não juntar se a linha anterior termina com pontuação final
+        if prev_line.rstrip().endswith(('.', '!', '?', ':', ';')):
+            return False
+        
+        # Não juntar se a linha atual começa com maiúscula e parece início de frase
+        if current_line and current_line[0].isupper():
+            # Verificar se não é número ou abreviação
+            if not re.match(r'^\d+', current_line):
+                return False
+        
+        # Não juntar linhas muito curtas (possíveis títulos)
+        if len(current_line) < 30 and current_line.isupper():
+            return False
+        
+        # Não juntar se parece ser uma lista ou item numerado
+        if re.match(r'^[-•*]\s', current_line) or re.match(r'^\d+\.\s', current_line):
+            return False
+        
+        # Juntar se as linhas são relacionadas
+        return True

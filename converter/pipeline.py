@@ -11,6 +11,8 @@ from pathlib import Path
 from .steps.text_extraction_step import TextExtractionStep
 from .steps.table_extraction_step import TableExtractionStep
 from .steps.cleanup_step import CleanupStep
+from .steps.selective_ocr_step import SelectiveOCRStep
+
 from .steps.image_extraction_step import ImageExtractionStep
 from .steps.markdown_conversion_step import MarkdownConversionStep
 from .steps.advanced_markdown_conversion_step import AdvancedMarkdownConversionStep
@@ -29,6 +31,7 @@ class ConversionPipeline:
             TextExtractionStep(),
             TableExtractionStep(),
             CleanupStep(),
+            SelectiveOCRStep(),  # OCR seletivo para melhorar precisão
             ImageExtractionStep(str(self.output_dir)),
             MarkdownConversionStep(),
             AdvancedMarkdownConversionStep(),
