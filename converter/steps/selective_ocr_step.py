@@ -17,8 +17,8 @@ class SelectiveOCRStep(BaseStep):
     
     def __init__(self):
         super().__init__("SelectiveOCR")
-        self.quality_threshold = 0.4  # Se a qualidade < 40%, usar OCR (muito sensível)
-        self.max_ocr_pages = 10  # Máximo de páginas por arquivo para OCR (aumentado)
+        self.quality_threshold = 0.6  # Se a qualidade < 60%, usar OCR (menos sensível)
+        self.max_ocr_pages = 10  # Reduzir para 10 páginas máximo (menos agressivo)
         self.ocr_quality_mode = "ultra_precise"  # Modo ultra-preciso
         self.enable_multiple_attempts = True  # Múltiplas tentativas de OCR
         self.enable_post_processing = True  # Pós-processamento avançado
@@ -498,40 +498,87 @@ class SelectiveOCRStep(BaseStep):
             self.log_info(f"Reduzindo palavras excessivamente repetidas: {problematic_words}")
             
             # Reduzir essas palavras (não remover completamente)
-            for word in problematic_words:
-                # Substituir apenas algumas ocorrências, não todas
-                pattern = r'\b{}\b'.format(re.escape(word))
-                matches = list(re.finditer(pattern, all_text, flags=re.IGNORECASE))
-                
-                # Remover apenas algumas ocorrências excessivas (manter até 50%)
-                if len(matches) > 50:
-                    # Manter apenas as primeiras ocorrências
-                    text_parts = []
-                    last_end = 0
-                    
-                    for i, match in enumerate(matches):
-                        if i < 25:  # Manter apenas as primeiras 25 ocorrências
-                            text_parts.append(all_text[last_end:match.end()])
-                            last_end = match.end()
-                    
-                    # Adicionar o resto do texto
-                    text_parts.append(all_text[last_end:])
-                    all_text = ''.join(text_parts)
+            
+    def _remove_duplications(self, text: str) -> str:
+        """Remove duplicações consecutivas no texto"""
+        if not text:
+            return text
         
-        # Normalizar espaços
-        cleaned_text = re.sub(r'\s+', ' ', all_text).strip()
+        lines = text.split('\n')
+        if len(lines) <= 1:
+            return text
         
-        # Reorganizar em linhas
+        # Remover duplicações consecutivas
+        cleaned_lines = []
+        for i, line in enumerate(lines):
+            # Pular linha se for igual à anterior
+            if i > 0 and line.strip() == lines[i-1].strip():
+                continue
+            # Pular linha se for muito similar à anterior (diferença < 10%)
+            if i > 0 and self._similarity(lines[i-1].strip(), line.strip()) > 0.9:
+                continue
+            cleaned_lines.append(line)
+        
+        # Remover blocos duplicados (3+ linhas consecutivas iguais)
         final_lines = []
-        sentences = re.split(r'[.!?]+', cleaned_text)
-        
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if sentence and len(sentence) > 10:
-                final_lines.append(sentence + '.')
+        i = 0
+        while i < len(cleaned_lines):
+            # Verificar se há 3+ linhas consecutivas iguais
+            if i + 2 < len(cleaned_lines):
+                block1 = '\n'.join(cleaned_lines[i:i+3])
+                if i + 5 < len(cleaned_lines):
+                    block2 = '\n'.join(cleaned_lines[i+3:i+6])
+                    if self._similarity(block1, block2) > 0.9:
+                        # Remover bloco duplicado
+                        final_lines.extend(cleaned_lines[i:i+3])
+                        i += 6
+                        continue
+            
+            final_lines.append(cleaned_lines[i])
+            i += 1
         
         return '\n'.join(final_lines)
     
+    def _similarity(self, text1: str, text2: str) -> float:
+        """Calcula similaridade entre dois textos (0-1)"""
+        if not text1 or not text2:
+            return 0.0
+        
+        # Normalizar textos
+        text1 = text1.strip().lower()
+        text2 = text2.strip().lower()
+        
+        if text1 == text2:
+            return 1.0
+        
+        # Distância de Levenshtein
+        len1, len2 = len(text1), len(text2)
+        if len1 == 0:
+            return 0.0
+        if len2 == 0:
+            return 0.0
+        
+        matrix = [[0] * (len2 + 1) for _ in range(len1 + 1)]
+        
+        for i in range(len1 + 1):
+            matrix[i][0] = i
+        for j in range(len2 + 1):
+            matrix[0][j] = j
+        
+        for i in range(1, len1 + 1):
+            for j in range(1, len2 + 1):
+                if text1[i-1] == text2[j-1]:
+                    matrix[i][j] = matrix[i-1][j-1]
+                else:
+                    matrix[i][j] = min(
+                        matrix[i-1][j] + 1,    # deletion
+                        matrix[i][j-1] + 1,    # insertion
+                        matrix[i-1][j-1] + 1   # substitution
+                    )
+        
+        max_len = max(len1, len2)
+        return 1 - (matrix[len1][len2] / max_len)
+        
     def _apply_final_cleaning(self, text: str, aggressive: bool = False) -> str:
         """Aplica limpeza final garantida no texto"""
         self.log_info(f"Aplicando limpeza {'agressiva' if aggressive else 'conservadora'}")
@@ -681,7 +728,7 @@ class SelectiveOCRStep(BaseStep):
             '--psm 6 --oem 1',  # Bloco uniforme, LSTM
             '--psm 3 --oem 1',  # Automático, LSTM
             '--psm 1 --oem 1',  # Automático, LSTM
-            '--psm 6 --oem 0',  # Bloco uniforme, Legacy
+            '--psm 6 --oem 1',  # Bloco uniforme, LSTM (removido legacy)
         ]
         
         for render_config in render_configs:
@@ -1010,7 +1057,7 @@ class SelectiveOCRStep(BaseStep):
                 # Agrupar por posição Y (com tolerância)
                 y_group = None
                 for group_y in line_groups.keys():
-                    if abs(y_group - y_pos) < 10:  # 10px de tolerância
+                    if y_group is not None and abs(y_group - y_pos) < 10:  # 10px de tolerância
                         y_group = group_y
                         break
                 
@@ -1149,13 +1196,26 @@ class SelectiveOCRStep(BaseStep):
                      f"linhas repetidas={normal_problems['repeated_lines']}")
         self.log_info(f"Qualidade do OCR: {ocr_quality['quality_score']:.1f}/100")
         
-        # SEMPRE aplicar limpeza final, independente da estratégia
+        # Verificar se há duplicações graves no texto normal
         if normal_problems['severe_repetitions'] or normal_problems['high_duplication']:
-            self.log_info("Problemas graves detectados - aplicando limpeza agressiva")
-            return self._apply_final_cleaning(normal_text, aggressive=True)
+            self.log_info("Problemas graves detectados - aplicando limpeza agressiva e considerando OCR")
+            
+            # Se o OCR tem qualidade significativamente melhor, usar OCR
+            if ocr_quality['quality_score'] > 70:
+                self.log_info("Usando OCR como base devido à alta qualidade")
+                combined_text = ocr_text
+            else:
+                # Aplicar limpeza agressiva no texto normal
+                combined_text = self._apply_final_cleaning(normal_text, aggressive=True)
         else:
-            self.log_info("Aplicando limpeza conservadora")
-            return self._apply_final_cleaning(normal_text, aggressive=False)
+            self.log_info("Problemas leves - aplicando limpeza conservadora")
+            # Usar texto normal com limpeza conservadora
+            combined_text = self._apply_final_cleaning(normal_text, aggressive=False)
+        
+        # Aplicar limpeza final para remover duplicações
+        final_text = self._remove_duplications(combined_text)
+        
+        return final_text
     
     def _smart_combine(self, normal_text: str, ocr_text: str) -> str:
         """Combina os dois textos de forma inteligente"""
