@@ -172,60 +172,180 @@ class TextExtractionStep(BaseStep):
         """Junta spans de forma inteligente preservando espaçamento natural"""
         if not spans:
             return ""
-        
-        joined_text = ""
-        prev_span_end = 0
-        
-        # Filtrar spans vazios ou muito pequenos
-        valid_spans = []
-        for span in spans:
-            text = span.get('text', '').strip()
-            if len(text) > 0 and not self._is_page_number(text) and not self._is_header_footer(text):
-                valid_spans.append(span)
-        
-        if not valid_spans:
+
+        # Usar algoritmo básico e robusto para estabilidade
+        return self._join_spans_basic(spans)
+    
+    def _join_spans_basic(self, spans: List[Dict]) -> str:
+        """Algoritmo básico e robusto para junção de spans"""
+        if not spans:
             return ""
         
-        for i, span in enumerate(valid_spans):
-            text = span.get('text', '')
-            bbox = span.get('bbox', [0, 0, 0, 0])
-            
-            # Verificar se deve adicionar espaço
-            should_add_space = False
-            
-            # Se não é o primeiro span
-            if i > 0:
-                # Verificar distância horizontal entre spans
-                current_span_start = bbox[0]
-                distance = current_span_start - prev_span_end
-                
-                # Se há espaço significativo entre spans, adicionar espaço
-                if distance > 2.0:  # Aumentado para 2 pontos de distância
-                    should_add_space = True
-                
-                # Se o texto anterior não termina com hífen, adicionar espaço
-                if not joined_text.strip().endswith('-'):
-                    should_add_space = True
-                
-                # Verificar se estamos na mesma linha (tolerância vertical)
-                if i > 0:
-                    prev_bbox = valid_spans[i-1].get('bbox', [0, 0, 0, 0])
-                    vertical_distance = abs(bbox[1] - prev_bbox[1])
-                    if vertical_distance > 5.0:  # Nova linha se distância vertical > 5
-                        joined_text += '\n'
-                        should_add_space = False
-            
-            # Adicionar espaço se necessário
-            if should_add_space and joined_text and not joined_text.endswith(' ') and not joined_text.endswith('\n'):
-                joined_text += ' '
-            
-            # Adicionar texto do span
-            joined_text += text
-            
-            # Atualizar posição final
-            prev_span_end = bbox[2]
+        joined_text = ""
+        for span in spans:
+            text = span.get('text', '').strip()
+            if text:
+                # Adicionar espaço se necessário
+                if joined_text and not joined_text.endswith(' ') and not joined_text.endswith('\n'):
+                    joined_text += ' '
+                joined_text += text
         
         return joined_text
+    
+    def _merge_broken_words(self, spans: List[Dict]) -> List[Dict]:
+        """Junta spans que fazem parte da mesma palavra quebrada"""
+        if len(spans) < 2:
+            return spans
+        
+        merged = []
+        i = 0
+        
+        while i < len(spans):
+            current_span = spans[i]
+            current_text = current_span.get('text', '')
+            current_bbox = current_span.get('bbox', [0, 0, 0, 0])
+            
+            # Verificar se o próximo span faz parte da mesma palavra
+            if i + 1 < len(spans):
+                next_span = spans[i + 1]
+                next_text = next_span.get('text', '')
+                next_bbox = next_span.get('bbox', [0, 0, 0, 0])
+                
+                # Verificar se são parte da mesma palavra quebrada
+                if self._is_broken_word(current_text, next_text, current_bbox, next_bbox):
+                    # Juntar os spans
+                    merged_text = current_text + next_text
+                    merged_bbox = [
+                        min(current_bbox[0], next_bbox[0]),
+                        min(current_bbox[1], next_bbox[1]),
+                        max(current_bbox[2], next_bbox[2]),
+                        max(current_bbox[3], next_bbox[3])
+                    ]
+                    
+                    merged_span = {
+                        'text': merged_text,
+                        'bbox': merged_bbox,
+                        'font': current_span.get('font', ''),
+                        'size': current_span.get('size', 0),
+                        'flags': current_span.get('flags', 0)
+                    }
+                    
+                    merged.append(merged_span)
+                    i += 2  # Pular o próximo span
+                    continue
+            
+            # Se não juntou, adicionar o span atual
+            merged.append(current_span)
+            i += 1
+        
+        return merged
+    
+    def _is_broken_word(self, text1: str, text2: str, bbox1: List[float], bbox2: List[float]) -> bool:
+        """Verifica se dois textos fazem parte da mesma palavra quebrada"""
+        # Verificar distância horizontal
+        distance = bbox2[0] - bbox1[2]
+        
+        # Se estão muito próximos horizontalmente
+        if distance < 5.0:
+            # Verificar se são parte de uma palavra válida
+            combined = text1 + text2
+            
+            # Regras para identificar palavras quebradas
+            # 1. Se a primeira parte termina com hífen
+            if text1.endswith('-'):
+                return True
+            
+            # 2. Se a segunda parte começa com minúscula
+            if text2 and text2[0].islower():
+                return True
+            
+            # 3. Se a combinação forma uma palavra válida
+            if self._is_valid_word_combination(text1, text2):
+                return True
+            
+            # 4. Se são muito próximos e fazem sentido juntos
+            if distance < 2.0 and len(combined) <= 20:
+                return True
+        
+        return False
+    
+    def _is_valid_word_combination(self, word1: str, word2: str) -> bool:
+        """Verifica se a combinação de duas palavras faz sentido"""
+        combined = word1 + word2
+        
+        # Regras básicas para validar combinação
+        # 1. Não pode ser muito longa
+        if len(combined) > 25:
+            return False
+        
+        # 2. Não pode ter consoantes duplas estranhas
+        import re
+        if re.search(r'([bcdfghjklmnpqrstvwxz])\1{3,}', combined):
+            return False
+        
+        # 3. Não pode ter vogais duplas estranhas
+        if re.search(r'([aeiou])\1{4,}', combined):
+            return False
+        
+        # 4. Deve ter pelo menos uma vogal
+        if not re.search(r'[aeiou]', combined):
+            return False
+        
+        # 5. Verificar padrões comuns de palavras quebradas
+        common_patterns = [
+            r'^[a-z]+[a-z]$',  # palavra normal
+            r'^[A-Z][a-z]+[a-z]$',  # palavra com inicial maiúscula
+            r'^[a-z]+[0-9]+$',  # palavra com números
+            r'^[A-Z]+[a-z]+$',  # sigla seguida de palavra
+        ]
+        
+        for pattern in common_patterns:
+            if re.match(pattern, combined):
+                return True
+        
+        return False
+    
+    def _should_join_without_space(self, prev_span: Dict, current_span: Dict) -> bool:
+        """Verifica se dois spans devem ser juntados sem espaço"""
+        prev_text = prev_span.get('text', '')
+        current_text = current_span.get('text', '')
+        
+        # Casos onde não deve ter espaço
+        # 1. Se o texto anterior termina com hífen
+        if prev_text.endswith('-'):
+            return True
+        
+        # 2. Se o texto atual começa com minúscula e o anterior não termina com pontuação
+        if (current_text and current_text[0].islower() and 
+            not prev_text.endswith(('.', '!', '?', ':', ';', ','))):
+            return True
+        
+        # 3. Se são parte de uma expressão matemática ou técnica
+        if self._is_technical_expression(prev_text, current_text):
+            return True
+        
+        return False
+    
+    def _is_technical_expression(self, text1: str, text2: str) -> bool:
+        """Verifica se os textos fazem parte de uma expressão técnica"""
+        combined = text1 + text2
+        
+        # Padrões comuns em expressões técnicas
+        technical_patterns = [
+            r'[A-Z][a-z]+\s*[=<>]\s*$',  # Variável = valor
+            r'[a-z]+\s*[=<>]\s*$',       # variável = valor
+            r'[0-9]+\s*[+\-*/]\s*$',     # Número + operador
+            r'[A-Z]{2,}\s*$',            # Siglas
+            r'[a-z]+\s*\([^)]*$',        # Função(
+            r'[A-Z][a-z]+\s*:\s*$',      # Título:
+        ]
+        
+        import re
+        for pattern in technical_patterns:
+            if re.search(pattern, text1):
+                return True
+        
+        return False
     
     def _is_page_number(self, text: str) -> bool:
         """Verifica se o texto é um número de página"""

@@ -81,7 +81,7 @@ class TableExtractionStep(BaseStep):
         return tables
     
     def _is_valid_table(self, table_data: List[List[str]]) -> bool:
-        """Verifica se uma tabela é válida e contém dados úteis"""
+        """Verifica se uma tabela é válida e contém dados úteis - VERSÃO MELHORADA"""
         if not table_data:
             return False
         
@@ -94,6 +94,10 @@ class TableExtractionStep(BaseStep):
         if max_cols < 2:
             return False
         
+        # NOVA VERIFICAÇÃO: Verificar se não é apenas texto corrido
+        if self._is_just_flowing_text(table_data):
+            return False
+        
         # Verificar se há conteúdo significativo
         total_cells = 0
         non_empty_cells = 0
@@ -104,12 +108,16 @@ class TableExtractionStep(BaseStep):
                 if cell and str(cell).strip():
                     non_empty_cells += 1
         
-        # Pelo menos 30% das células devem ter conteúdo
+        # Pelo menos 40% das células devem ter conteúdo (aumentado de 30%)
         if total_cells == 0:
             return False
         
         content_ratio = non_empty_cells / total_cells
-        if content_ratio < 0.3:
+        if content_ratio < 0.4:
+            return False
+        
+        # NOVA VERIFICAÇÃO: Verificar estrutura tabular real
+        if not self._has_tabular_structure(table_data):
             return False
         
         # Verificar se não é apenas uma lista de números ou símbolos
@@ -122,13 +130,158 @@ class TableExtractionStep(BaseStep):
                     if re.search(r'[a-zA-Z]', cell_text) or len(cell_text) > 3:
                         meaningful_content += 1
         
-        # Pelo menos 20% das células devem ter conteúdo significativo
+        # Pelo menos 30% das células devem ter conteúdo significativo (aumentado de 20%)
         if total_cells > 0:
             meaningful_ratio = meaningful_content / total_cells
-            if meaningful_ratio < 0.2:
+            if meaningful_ratio < 0.3:
                 return False
         
         return True
+    
+    def _is_just_flowing_text(self, table_data: List[List[str]]) -> bool:
+        """Verifica se os dados são apenas texto corrido disfarçado de tabela"""
+        if not table_data:
+            return True
+        
+        # Se há muitas linhas com apenas uma célula, provavelmente é texto corrido
+        single_cell_rows = 0
+        for row in table_data:
+            if len(row) == 1 or (len(row) == 2 and not any(cell.strip() for cell in row[1:])):
+                single_cell_rows += 1
+        
+        # Se mais de 70% das linhas têm apenas uma célula, é texto corrido
+        if len(table_data) > 0 and single_cell_rows / len(table_data) > 0.7:
+            return True
+        
+        # Verificar se o texto flui naturalmente entre células
+        if self._has_natural_text_flow(table_data):
+            return True
+        
+        return False
+    
+    def _has_natural_text_flow(self, table_data: List[List[str]]) -> bool:
+        """Verifica se o texto flui naturalmente entre células (indicando texto corrido)"""
+        if len(table_data) < 3:
+            return False
+        
+        # Juntar todas as células em uma string
+        all_text = ""
+        for row in table_data:
+            for cell in row:
+                if cell and str(cell).strip():
+                    all_text += str(cell).strip() + " "
+        
+        # Verificar se há frases completas e naturais
+        sentences = re.split(r'[.!?]', all_text)
+        complete_sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
+        
+        # Se há muitas frases completas, provavelmente é texto corrido
+        if len(complete_sentences) >= 2:
+            return True
+        
+        # Verificar se há palavras quebradas entre células
+        broken_words = 0
+        for i, row in enumerate(table_data):
+            for j, cell in enumerate(row):
+                if cell and str(cell).strip():
+                    cell_text = str(cell).strip()
+                    # Verificar se a célula termina com uma palavra incompleta
+                    if not re.search(r'\b\w+$', cell_text):
+                        broken_words += 1
+        
+        # Se há muitas palavras quebradas, é texto corrido
+        total_cells = sum(len(row) for row in table_data)
+        if total_cells > 0 and broken_words / total_cells > 0.3:
+            return True
+        
+        return False
+    
+    def _has_tabular_structure(self, table_data: List[List[str]]) -> bool:
+        """Verifica se os dados têm uma estrutura tabular real"""
+        if not table_data or len(table_data) < 2:
+            return False
+        
+        # Verificar se há um cabeçalho claro
+        header_row = table_data[0]
+        if not any(cell and str(cell).strip() for cell in header_row):
+            return False
+        
+        # Verificar se há dados organizados em colunas
+        max_cols = max(len(row) for row in table_data if row)
+        if max_cols < 2:
+            return False
+        
+        # Verificar se as colunas têm conteúdo consistente
+        column_content_types = []
+        for col in range(max_cols):
+            col_content = []
+            for row in table_data[1:]:  # Pular cabeçalho
+                if col < len(row) and row[col]:
+                    col_content.append(str(row[col]).strip())
+            
+            if col_content:
+                # Verificar se a coluna tem um tipo de conteúdo consistente
+                content_type = self._classify_column_content(col_content)
+                column_content_types.append(content_type)
+        
+        # Se há pelo menos 2 colunas com tipos de conteúdo diferentes, é uma tabela real
+        if len(set(column_content_types)) >= 2:
+            return True
+        
+        # Verificar se há dados numéricos organizados
+        numeric_columns = 0
+        for col in range(max_cols):
+            col_content = []
+            for row in table_data[1:]:
+                if col < len(row) and row[col]:
+                    col_content.append(str(row[col]).strip())
+            
+            if self._is_numeric_column(col_content):
+                numeric_columns += 1
+        
+        # Se há pelo menos uma coluna numérica, é uma tabela real
+        if numeric_columns >= 1:
+            return True
+        
+        return False
+    
+    def _classify_column_content(self, content: List[str]) -> str:
+        """Classifica o tipo de conteúdo de uma coluna"""
+        if not content:
+            return "empty"
+        
+        # Verificar se é numérico
+        numeric_count = 0
+        for item in content:
+            if re.match(r'^[\d\.,\-\+\s]+$', item):
+                numeric_count += 1
+        
+        if numeric_count / len(content) > 0.7:
+            return "numeric"
+        
+        # Verificar se é texto curto (títulos, labels)
+        short_text_count = 0
+        for item in content:
+            if len(item) <= 20:
+                short_text_count += 1
+        
+        if short_text_count / len(content) > 0.8:
+            return "short_text"
+        
+        return "long_text"
+    
+    def _is_numeric_column(self, content: List[str]) -> bool:
+        """Verifica se uma coluna contém principalmente dados numéricos"""
+        if not content:
+            return False
+        
+        numeric_count = 0
+        for item in content:
+            # Verificar se é um número (incluindo decimais, porcentagens, etc.)
+            if re.match(r'^[\d\.,\-\+\s%]+$', item) and len(item.strip()) > 0:
+                numeric_count += 1
+        
+        return numeric_count / len(content) > 0.6
     
     def _is_duplicate_table(self, new_table: List[List[str]], existing_tables: List[Dict[str, Any]]) -> bool:
         """Verifica se uma tabela é duplicada"""

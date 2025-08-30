@@ -16,8 +16,16 @@ from .steps.selective_ocr_step import SelectiveOCRStep
 from .steps.image_extraction_step import ImageExtractionStep
 from .steps.markdown_conversion_step import MarkdownConversionStep
 from .steps.advanced_markdown_conversion_step import AdvancedMarkdownConversionStep
+from .steps.text_cleanup_step import TextCleanupStep
 from .steps.spell_checking_step import SpellCheckingStep
 from .steps.book_conversion_step import BookConversionStep
+from .steps.list_detection_step import ListDetectionStep
+from .steps.quote_code_step import QuoteCodeStep
+from .steps.footnote_step import FootnoteStep
+from .steps.header_footer_filter_step import HeaderFooterFilterStep
+from .steps.citation_step import CitationStep
+from .steps.table_processing_step import TableProcessingStep
+from .steps.robust_processing_step import RobustProcessingStep
 
 class ConversionPipeline:
     """Pipeline de conversão de PDF para Markdown com fluxos específicos por idioma e tipo"""
@@ -62,12 +70,28 @@ class ConversionPipeline:
             'article': [
                 MarkdownConversionStep(),  # Conversão otimizada para artigos
                 AdvancedMarkdownConversionStep(),  # Processamento avançado para artigos
+                TextCleanupStep(),  # Limpeza e correção de texto
+                RobustProcessingStep(),  # Processamento robusto - ignora estruturas problemáticas
+                TableProcessingStep(),  # Processamento de tabelas
+                ListDetectionStep(),  # Detecção de listas
+                QuoteCodeStep(),  # Blocos de citação e código
+                FootnoteStep(),  # Notas de rodapé
+                HeaderFooterFilterStep(),  # Filtragem de cabeçalhos/rodapés
+                CitationStep(),  # Citações e bibliografia
                 SpellCheckingStep(),  # Correção ortográfica específica para artigos
             ],
             'book': [
                 MarkdownConversionStep(),  # Conversão otimizada para livros
                 BookConversionStep(),  # Otimizações específicas para livros
                 AdvancedMarkdownConversionStep(),  # Processamento avançado para livros
+                TextCleanupStep(),  # Limpeza e correção de texto
+                RobustProcessingStep(),  # Processamento robusto - ignora estruturas problemáticas
+                TableProcessingStep(),  # Processamento de tabelas
+                ListDetectionStep(),  # Detecção de listas
+                QuoteCodeStep(),  # Blocos de citação e código
+                FootnoteStep(),  # Notas de rodapé
+                HeaderFooterFilterStep(),  # Filtragem de cabeçalhos/rodapés
+                CitationStep(),  # Citações e bibliografia
                 SpellCheckingStep(),  # Correção ortográfica específica para livros
             ]
         }

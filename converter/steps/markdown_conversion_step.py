@@ -141,14 +141,8 @@ class MarkdownConversionStep(BaseStep):
                 if cleaned_text:
                     markdown_content.append(converter_texto(cleaned_text))
         
-        # Processar tabelas
-        tables = data.get('tables', [])
-        for table in tables:
-            table_markdown = converter_tabela(table['dados'])
-            if table_markdown:
-                markdown_content.append(f"\n## Tabela {table['numero']} (Página {table['pagina']})\n")
-                markdown_content.append(table_markdown)
-                markdown_content.append("\n")
+        # Tabelas serão processadas pelo TableProcessingStep
+        # Não processar tabelas aqui para evitar duplicação
         
         # Processar imagens
         images = data.get('images', [])
@@ -203,7 +197,7 @@ class MarkdownConversionStep(BaseStep):
                 size = info['tamanho']
                 
                 # Detectar títulos usando a nova lógica inteligente
-                if self._is_title(text) and size >= 12:  # Títulos têm fonte maior
+                if self._is_title(text, info):  # Passar font_info para _is_title
                     page_content.append(f"# {text}")
                 else:
                     page_content.append(text)
@@ -312,8 +306,8 @@ class MarkdownConversionStep(BaseStep):
             if not paragraph:
                 continue
             
-            # Detectar títulos usando a nova lógica inteligente
-            if self._is_title(paragraph):
+            # Detectar títulos usando a nova lógica inteligente (sem font_info)
+            if self._is_title(paragraph, None):
                 processed_paragraphs.append(f"# {paragraph}")
             else:
                 processed_paragraphs.append(paragraph)
@@ -366,37 +360,325 @@ class MarkdownConversionStep(BaseStep):
         
         return '\n'.join(cleaned_lines)
     
-    def _is_title(self, text: str) -> bool:
+    def _is_title(self, text: str, font_info: Dict[str, Any] = None) -> bool:
         """
-        Detecta se uma linha de texto é um título baseado em análise linguística e estrutural
+        Determina se um texto é um título usando análise multi-fator com validação contextual
         """
         if not text or not text.strip():
             return False
         
         text_stripped = text.strip()
+        text_lower = text_stripped.lower()
         words = text_stripped.split()
         word_count = len(words)
-        text_lower = text_stripped.lower()
         
-        # Se tem menos de 2 palavras, provavelmente não é título
-        if word_count < 2:
+        # === REGRAS ABSOLUTAS ===
+        # Se falhar em qualquer regra absoluta, não é título
+        if not self._passes_absolute_rules(text_stripped):
             return False
         
-        # Se tem mais de 15 palavras, provavelmente é texto corrido
-        if word_count > 15:
+        # === ANÁLISE DE FONTE ===
+        font_score = 0
+        if font_info:
+            size = font_info.get('tamanho', 0)
+            font_name = font_info.get('fonte', '').lower()
+            
+            # Pontuar baseado no tamanho da fonte
+            if size >= 18:
+                font_score += 4  # Muito provável título
+            elif size >= 16:
+                font_score += 3  # Muito provável título
+            elif size >= 14:
+                font_score += 2  # Provável título
+            elif size >= 12:
+                font_score += 1  # Possível título
+            elif size < 10:
+                font_score -= 1  # Improvável título
+            
+            # Pontuar baseado no nome da fonte
+            bold_fonts = ['bold', 'black', 'heavy', 'semibold', 'demibold', 'b']
+            if any(bold in font_name for bold in bold_fonts):
+                font_score += 2
+            
+            # Pontuar baseado na posição (títulos geralmente estão no topo)
+            pos_y = font_info.get('posicao', [0, 0])[1]
+            if pos_y < 150:  # Topo da página
+                font_score += 1
+        
+        # === ANÁLISE DE CAPITALIZAÇÃO ===
+        capitalization_score = 0
+        
+        # Verificar se está em Title Case (primeira letra de cada palavra em maiúscula)
+        if self._is_title_case(text_stripped):
+            capitalization_score += 3
+        
+        # Verificar se está em ALL CAPS
+        if text_stripped.isupper() and len(text_stripped) > 3:
+            capitalization_score += 4
+        
+        # Verificar se começa com maiúscula
+        if text_stripped and text_stripped[0].isupper():
+            capitalization_score += 1
+        
+        # === ANÁLISE DE COMPRIMENTO ===
+        length_score = 0
+        
+        # Títulos têm comprimento moderado
+        if 2 <= word_count <= 6:
+            length_score += 3
+        elif 7 <= word_count <= 10:
+            length_score += 2
+        elif 11 <= word_count <= 15:
+            length_score += 1
+        elif word_count < 2:
+            length_score -= 2  # Muito curto
+        elif word_count > 15:
+            length_score -= 3  # Muito longo, provavelmente texto corrido
+        
+        # === ANÁLISE LINGUÍSTICA AVANÇADA ===
+        linguistic_score = 0
+        
+        # Verificar seções acadêmicas conhecidas
+        academic_sections = self._get_academic_sections()
+        if text_lower in academic_sections:
+            linguistic_score += 4
+        
+        # Verificar padrões de títulos
+        title_patterns = self._get_title_patterns()
+        for pattern in title_patterns:
+            if re.match(pattern, text_lower):
+                linguistic_score += 3
+                break
+        
+        # PENALIZAR se contém verbos conjugados (indica frase, não título)
+        if self._has_conjugated_verb(text_stripped):
+            linguistic_score -= 3
+        
+        # PENALIZAR se parece continuação de texto
+        if self._looks_like_continuation(text_stripped):
+            linguistic_score -= 2
+        
+        # PENALIZAR se é frase comum
+        if self._is_common_sentence(text_stripped):
+            linguistic_score -= 2
+        
+        # === ANÁLISE DE CONTEXTO AVANÇADA ===
+        context_score = 0
+        
+        # PENALIZAR frases que começam com preposições comuns
+        prepositions = ['em', 'no', 'na', 'por', 'para', 'com', 'de', 'da', 'do', 'das', 'dos',
+                       'in', 'on', 'at', 'by', 'for', 'with', 'of', 'to', 'from']
+        if words and words[0].lower() in prepositions and word_count > 3:
+            context_score -= 3
+        
+        # Verificar se parece ser uma lista ou item numerado
+        if re.match(r'^[-•*]\s', text_stripped) or re.match(r'^\d+\.\s', text_stripped):
+            context_score += 2
+        
+        # === ANÁLISE SEMÂNTICA ===
+        semantic_score = 0
+        
+        # Verificar se é uma expressão técnica ou matemática
+        if self._is_technical_expression(text_stripped):
+            semantic_score -= 2  # Provavelmente não é título
+        
+        # Verificar se é uma referência ou citação
+        if self._is_reference_or_citation(text_stripped):
+            semantic_score -= 3  # Definitivamente não é título
+        
+        # Verificar se é uma nota de rodapé
+        if self._is_footnote_reference(text_stripped):
+            semantic_score -= 3  # Definitivamente não é título
+        
+        # === ANÁLISE DE PONTUAÇÃO ===
+        punctuation_score = 0
+        
+        # Títulos podem terminar com dois pontos (para subtítulos)
+        if text_stripped.endswith(':'):
+            punctuation_score += 2
+        
+        # === VALIDAÇÃO CONTEXTUAL ===
+        contextual_validation = self._validate_title_context(text_stripped, font_info)
+        if contextual_validation < 0:
+            return False  # Falha na validação contextual
+        
+        # === CÁLCULO DO SCORE FINAL ===
+        total_score = (font_score + capitalization_score + length_score + 
+                      linguistic_score + context_score + semantic_score + 
+                      punctuation_score + contextual_validation)
+        
+        # Threshold mais alto para reduzir falsos positivos
+        threshold = 8  # Aumentado de 6 para 8
+        
+        # Log detalhado para debugging
+        self.log_info(f"Title detection: '{text_stripped}' - Score: {total_score} "
+                     f"(font:{font_score}, cap:{capitalization_score}, len:{length_score}, "
+                     f"ling:{linguistic_score}, ctx:{context_score}, sem:{semantic_score}, "
+                     f"punct:{punctuation_score}, val:{contextual_validation})")
+        
+        return total_score >= threshold
+    
+    def _passes_absolute_rules(self, text: str) -> bool:
+        """Verifica se o texto passa pelas regras absolutas para ser título"""
+        # Títulos não podem terminar com pontuação de frase
+        if text.endswith(('.', '!', '?')):
             return False
         
-        # Verificar seções baseado no idioma e tipo de conteúdo
+        # Títulos não podem terminar com reticências
+        if text.endswith('...'):
+            return False
+        
+        # Títulos não podem ser muito longos (mais de 20 palavras)
+        if len(text.split()) > 20:
+            return False
+        
+        # Títulos não podem ser apenas números ou símbolos
+        if re.match(r'^[\d\s\-\.]+$', text):
+            return False
+        
+        # Títulos não podem ser apenas caracteres especiais
+        if re.match(r'^[^\w\s]+$', text):
+            return False
+        
+        return True
+    
+    def _is_technical_expression(self, text: str) -> bool:
+        """Verifica se o texto é uma expressão técnica ou matemática"""
+        # Padrões de expressões técnicas
+        technical_patterns = [
+            r'^[A-Z][a-z]+\s*[=<>]\s*',  # Variável = valor
+            r'^[a-z]+\s*[=<>]\s*',       # variável = valor
+            r'^[0-9]+\s*[+\-*/]\s*',     # Número + operador
+            r'^[A-Z]{2,}\s*$',           # Siglas
+            r'^[a-z]+\s*\([^)]*$',       # Função(
+            r'^[A-Z][a-z]+\s*:\s*$',     # Título:
+            r'^[α-ωΑ-Ω]\s*[=<>]\s*',     # Letras gregas
+            r'^[∑∫∏√∞±≤≥≠]\s*',          # Símbolos matemáticos
+        ]
+        
+        for pattern in technical_patterns:
+            if re.match(pattern, text):
+                return True
+        
+        return False
+    
+    def _is_reference_or_citation(self, text: str) -> bool:
+        """Verifica se o texto é uma referência ou citação"""
+        # Padrões de referências
+        reference_patterns = [
+            r'^\[[^\]]+\]$',              # [referência]
+            r'^\([^)]+\)$',               # (referência)
+            r'^[A-Z][a-z]+\s+et\s+al\.',  # Autor et al.
+            r'^\d{4}\.',                  # Ano.
+            r'^[A-Z][a-z]+\s+\d{4}',      # Autor 2024
+        ]
+        
+        for pattern in reference_patterns:
+            if re.match(pattern, text):
+                return True
+        
+        return False
+    
+    def _is_footnote_reference(self, text: str) -> bool:
+        """Verifica se o texto é uma referência de nota de rodapé"""
+        # Padrões de notas de rodapé
+        footnote_patterns = [
+            r'^\d+$',                     # Apenas número
+            r'^\[\d+\]$',                 # [número]
+            r'^\(\d+\)$',                 # (número)
+            r'^\^[a-zA-Z0-9]+$',          # ^referência
+        ]
+        
+        for pattern in footnote_patterns:
+            if re.match(pattern, text):
+                return True
+        
+        return False
+    
+    def _validate_title_context(self, text: str, font_info: Dict[str, Any] = None) -> int:
+        """Validação contextual avançada para títulos"""
+        score = 0
+        
+        # Verificar se o texto está isolado (títulos geralmente estão sozinhos)
+        if font_info:
+            # Se há muito texto próximo, pode não ser título
+            # Esta validação seria implementada com análise do contexto da página
+            pass
+        
+        # Verificar se o texto tem estrutura de título
+        if self._has_title_structure(text):
+            score += 2
+        
+        # Verificar se não é parte de uma lista
+        if not self._is_list_item(text):
+            score += 1
+        
+        # Verificar se não é parte de uma tabela
+        if not self._is_table_content(text):
+            score += 1
+        
+        return score
+    
+    def _has_title_structure(self, text: str) -> bool:
+        """Verifica se o texto tem estrutura típica de título"""
+        words = text.split()
+        
+        # Títulos geralmente têm estrutura específica
+        if len(words) >= 2:
+            # Verificar se as palavras principais começam com maiúscula
+            important_words = [w for w in words if len(w) > 2]
+            if important_words:
+                capitalized_count = sum(1 for w in important_words if w[0].isupper())
+                if capitalized_count >= len(important_words) * 0.7:  # 70% das palavras importantes
+                    return True
+        
+        return False
+    
+    def _is_list_item(self, text: str) -> bool:
+        """Verifica se o texto é um item de lista"""
+        # Padrões de itens de lista
+        list_patterns = [
+            r'^[-•*]\s+',                 # - item
+            r'^\d+\.\s+',                 # 1. item
+            r'^[a-z]\)\s+',               # a) item
+            r'^[A-Z]\)\s+',               # A) item
+            r'^\(\d+\)\s+',               # (1) item
+        ]
+        
+        for pattern in list_patterns:
+            if re.match(pattern, text):
+                return True
+        
+        return False
+    
+    def _is_table_content(self, text: str) -> bool:
+        """Verifica se o texto é conteúdo de tabela"""
+        # Padrões de conteúdo de tabela
+        table_patterns = [
+            r'^\|.*\|$',                  # | conteúdo |
+            r'^[A-Z][a-z]+\s+\d+',       # Nome 123
+            r'^\d+\.\d+',                 # 12.34
+            r'^[A-Z]{1,3}\s+\d+',        # ABC 123
+        ]
+        
+        for pattern in table_patterns:
+            if re.match(pattern, text):
+                return True
+        
+        return False
+    
+    def _get_academic_sections(self) -> List[str]:
+        """Retorna lista de seções acadêmicas baseada no idioma e tipo de conteúdo"""
         if self.content_type == 'article':
             if self.language == 'pt-br':
-                academic_sections = [
+                return [
                     'resumo', 'introdução', 'métodos', 'materiais', 'resultados', 'discussão',
                     'conclusão', 'conclusões', 'referências', 'bibliografia', 'agradecimentos',
                     'apêndice', 'apêndices', 'método', 'resultado', 'abstract', 'introduction',
                     'methods', 'materials', 'results', 'conclusion', 'references'
                 ]
             else:
-                academic_sections = [
+                return [
                     'abstract', 'introduction', 'methods', 'materials', 'results', 'discussion',
                     'conclusion', 'conclusions', 'references', 'bibliography', 'acknowledgments',
                     'appendix', 'appendices', 'method', 'result', 'acknowledgements',
@@ -405,39 +687,37 @@ class MarkdownConversionStep(BaseStep):
                 ]
         elif self.content_type == 'book':
             if self.language == 'pt-br':
-                academic_sections = [
+                return [
                     'capítulo', 'parte', 'seção', 'apêndice', 'índice', 'bibliografia',
                     'chapter', 'part', 'section', 'appendix', 'index', 'bibliography'
                 ]
             else:
-                academic_sections = [
+                return [
                     'chapter', 'part', 'section', 'appendix', 'index', 'bibliography',
                     'capítulo', 'parte', 'seção', 'apêndice', 'índice', 'bibliografia'
                 ]
         else:
             # Auto-detection - incluir ambos
             if self.language == 'pt-br':
-                academic_sections = [
+                return [
                     'resumo', 'introdução', 'métodos', 'materiais', 'resultados', 'discussão',
                     'conclusão', 'conclusões', 'referências', 'bibliografia', 'agradecimentos',
                     'apêndice', 'apêndices', 'método', 'resultado', 'capítulo', 'parte', 'seção',
                     'abstract', 'introduction', 'methods', 'materials', 'results', 'conclusion', 'references'
                 ]
             else:
-                academic_sections = [
+                return [
                     'abstract', 'introduction', 'methods', 'materials', 'results', 'discussion',
                     'conclusion', 'conclusions', 'references', 'bibliography', 'acknowledgments',
                     'appendix', 'appendices', 'method', 'result', 'acknowledgements', 'chapter', 'part', 'section',
                     'resumo', 'introdução', 'métodos', 'materiais', 'resultados', 'discussão',
                     'conclusão', 'conclusões', 'referências', 'bibliografia', 'agradecimentos'
                 ]
-        
-        if text_lower in academic_sections:
-            return True
-        
-        # Verificar padrões de títulos de livros baseado no idioma
+    
+    def _get_title_patterns(self) -> List[str]:
+        """Retorna padrões de títulos baseados no idioma"""
         if self.language == 'pt-br':
-            book_patterns = [
+            return [
                 r'^capítulo\s+\d+',
                 r'^chapter\s+\d+',
                 r'^\d+\.\s+',
@@ -449,10 +729,12 @@ class MarkdownConversionStep(BaseStep):
                 r'^bibliografia$',
                 r'^bibliography$',
                 r'^parte\s+\d+',
-                r'^seção\s+\d+'
+                r'^seção\s+\d+',
+                r'^section\s+\d+',
+                r'^part\s+\d+'
             ]
         else:
-            book_patterns = [
+            return [
                 r'^chapter\s+\d+',
                 r'^capítulo\s+\d+',
                 r'^\d+\.\s+',
@@ -464,39 +746,10 @@ class MarkdownConversionStep(BaseStep):
                 r'^bibliography$',
                 r'^bibliografia$',
                 r'^part\s+\d+',
-                r'^section\s+\d+'
+                r'^section\s+\d+',
+                r'^parte\s+\d+',
+                r'^seção\s+\d+'
             ]
-        
-        for pattern in book_patterns:
-            if re.match(pattern, text_lower):
-                return True
-        
-        # Verificar se contém verbos conjugados (indica frase, não título)
-        if self._has_conjugated_verb(text_stripped):
-            return False
-        
-        # Verificar se é uma frase comum
-        if self._is_common_sentence(text_stripped):
-            return False
-        
-        # Verificar se parece continuação de texto
-        if self._looks_like_continuation(text_stripped):
-            return False
-        
-        # Verificar formatação (Title Case)
-        if self._is_title_case(text_stripped):
-            return True
-        
-        # Verificar se termina com pontuação de frase
-        if text_stripped.endswith(('.', '!', '?')):
-            return False
-        
-        # Verificar se contém palavras muito comuns no início
-        common_starters = ['the', 'a', 'an', 'this', 'that', 'these', 'those', 'o', 'a', 'os', 'as', 'um', 'uma']
-        if words[0].lower() in common_starters and word_count < 5:
-            return False
-        
-        return True
     
     def _is_title_case(self, text: str) -> bool:
         """
