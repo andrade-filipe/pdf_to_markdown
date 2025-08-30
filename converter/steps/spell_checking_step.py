@@ -26,9 +26,21 @@ class SpellCheckingStep(BaseStep):
         
         # Palavras científicas comuns
         self.scientific_words = {
+            # Inglês
             'evolution', 'creation', 'geology', 'biology', 'chemistry', 'physics',
+            'fossil', 'sediment', 'strata', 'formation', 'analysis', 'methodology',
+            'hypothesis', 'theory', 'experiment', 'observation', 'conclusion',
+            'research', 'study', 'investigation', 'examination', 'evaluation',
+            'assessment', 'measurement', 'calculation', 'computation', 'simulation',
+            'modeling', 'prediction', 'forecast', 'estimation', 'approximation',
+            
+            # Português
             'evolução', 'criação', 'geologia', 'biologia', 'química', 'física',
-            'fossil', 'sediment', 'strata', 'formation', 'fóssil', 'sedimento', 'estrato'
+            'fóssil', 'sedimento', 'estrato', 'formação', 'análise', 'metodologia',
+            'hipótese', 'teoria', 'experimento', 'observação', 'conclusão',
+            'pesquisa', 'estudo', 'investigação', 'exame', 'avaliação',
+            'medição', 'cálculo', 'computação', 'simulação', 'modelagem',
+            'predição', 'previsão', 'estimativa', 'aproximação'
         }
         
         self.common_words.update(self.scientific_words)
@@ -115,7 +127,7 @@ class SpellCheckingStep(BaseStep):
         for common_word in self.common_words:
             if len(common_word) > 3:
                 similarity = SequenceMatcher(None, word_lower, common_word).ratio()
-                if similarity > best_similarity and similarity > 0.8:
+                if similarity > best_similarity and similarity > 0.85:  # Mais conservador
                     best_similarity = similarity
                     best_match = common_word
         

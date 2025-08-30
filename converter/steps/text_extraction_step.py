@@ -18,13 +18,22 @@ class TextExtractionStep(BaseStep):
         if not pdf_path:
             raise ValueError("pdf_path é obrigatório")
         
+        # Verificar se é um PDF digitalizado (apenas imagem)
+        if self._is_scanned_pdf(pdf_path):
+            self.log_warning(f"PDF detectado como digitalizado (apenas imagem): {pdf_path}")
+            self.log_warning("Este algoritmo não extrai texto de PDFs digitalizados. Arquivo será ignorado.")
+            data['is_scanned_pdf'] = True
+            data['extraction_warning'] = "PDF digitalizado detectado - extração de texto não suportada"
+            return data
+        
         # Abrir o PDF
         doc = fitz.open(pdf_path)
         extracted_data = {
             'text_blocks': [],
             'font_info': [],
             'total_pages': len(doc),
-            'raw_text': ""
+            'raw_text': "",
+            'is_scanned_pdf': False
         }
         
         for page_num in range(len(doc)):
@@ -47,6 +56,85 @@ class TextExtractionStep(BaseStep):
         # Adicionar dados extraídos ao contexto
         data.update(extracted_data)
         return data
+    
+    def _is_scanned_pdf(self, pdf_path: str) -> bool:
+        """
+        Detecta se um PDF é digitalizado (apenas imagem) baseado em:
+        1. Baixa densidade de texto
+        2. Alta proporção de imagens
+        3. Falta de informações de fonte
+        4. Texto muito fragmentado ou inexistente
+        """
+        try:
+            doc = fitz.open(pdf_path)
+            total_pages = len(doc)
+            
+            if total_pages == 0:
+                return True
+            
+            # Analisar as primeiras páginas para determinar o tipo
+            pages_to_check = min(3, total_pages)
+            text_density = 0
+            image_density = 0
+            font_info_count = 0
+            
+            for page_num in range(pages_to_check):
+                page = doc[page_num]
+                
+                # Extrair texto
+                text = page.get_text()
+                text_density += len(text.strip())
+                
+                # Contar imagens
+                image_list = page.get_images()
+                image_density += len(image_list)
+                
+                # Verificar informações de fonte
+                try:
+                    blocks = page.get_text("dict")
+                    for block in blocks.get("blocks", []):
+                        if "lines" in block:
+                            for line in block["lines"]:
+                                for span in line["spans"]:
+                                    if span.get('text', '').strip():
+                                        font_info_count += 1
+                except:
+                    pass
+            
+            doc.close()
+            
+            # Calcular densidades médias
+            avg_text_density = text_density / pages_to_check
+            avg_image_density = image_density / pages_to_check
+            avg_font_info = font_info_count / pages_to_check
+            
+            # Critérios para detectar PDF digitalizado
+            is_scanned = False
+            
+            # Critério 1: Muito pouco texto (< 100 caracteres por página)
+            if avg_text_density < 100:
+                is_scanned = True
+            
+            # Critério 2: Muitas imagens (> 2 por página) e pouco texto
+            elif avg_image_density > 2 and avg_text_density < 500:
+                is_scanned = True
+            
+            # Critério 3: Poucas informações de fonte (< 5 por página)
+            elif avg_font_info < 5 and avg_text_density < 1000:
+                is_scanned = True
+            
+            # Critério 4: Texto muito fragmentado (muitos caracteres isolados)
+            if avg_text_density > 0:
+                # Se há texto mas é muito fragmentado, pode ser OCR de baixa qualidade
+                if avg_font_info > 0 and avg_text_density / avg_font_info < 10:
+                    is_scanned = True
+            
+            return is_scanned
+            
+        except Exception as e:
+            self.log_info(f"Erro ao detectar tipo de PDF {pdf_path}: {e}")
+            # Em caso de erro, assumir que não é digitalizado
+            return False
     
     def _extract_text_with_dict_method(self, page, page_num: int) -> str:
         """Extrai texto usando método dict com junção inteligente de spans"""
@@ -198,8 +286,8 @@ class TextExtractionStep(BaseStep):
             if len(clean_word) > 2:  # Ignorar palavras muito curtas
                 word_freq[clean_word] = word_freq.get(clean_word, 0) + 1
         
-        # Identificar palavras excessivamente repetidas
-        excessive_words = {word: count for word, count in word_freq.items() if count > 100}
+        # Identificar palavras excessivamente repetidas (mais conservador)
+        excessive_words = {word: count for word, count in word_freq.items() if count > 500}
         
         if excessive_words:
             # Reconstruir texto removendo ou substituindo palavras excessivas

@@ -190,3 +190,5 @@ Thumbs.db
 *.bak
 *.backup
 *.tmp
+
+output/

@@ -21,3 +21,11 @@ class BaseStep(ABC):
     def log_info(self, message: str):
         """Log de informações do passo"""
         print(f"[{self.name}] {message}")
+    
+    def log_warning(self, message: str):
+        """Log de avisos do passo"""
+        print(f"[{self.name}] ⚠️  {message}")
+    
+    def log_error(self, message: str):
+        """Log de erros do passo"""
+        print(f"[{self.name}] ❌ {message}")

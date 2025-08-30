@@ -716,19 +716,16 @@ class SelectiveOCRStep(BaseStep):
         """Executa múltiplas tentativas de OCR com diferentes configurações"""
         results = []
         
-        # Configurações de renderização
+        # Configurações de renderização (otimizadas)
         render_configs = [
-            {'zoom': 2.0, 'colorspace': 'rgb'},
-            {'zoom': 3.0, 'colorspace': 'rgb'},
-            {'zoom': 2.5, 'colorspace': 'gray'},
+            {'zoom': 2.5, 'colorspace': 'rgb'},  # Configuração balanceada
+            {'zoom': 3.0, 'colorspace': 'gray'},  # Alta qualidade para casos difíceis
         ]
         
-        # Configurações do Tesseract
+        # Configurações do Tesseract (otimizadas)
         tesseract_configs = [
-            '--psm 6 --oem 1',  # Bloco uniforme, LSTM
-            '--psm 3 --oem 1',  # Automático, LSTM
-            '--psm 1 --oem 1',  # Automático, LSTM
-            '--psm 6 --oem 1',  # Bloco uniforme, LSTM (removido legacy)
+            '--psm 6 --oem 1',  # Bloco uniforme, LSTM (melhor para artigos)
+            '--psm 3 --oem 1',  # Automático, LSTM (fallback)
         ]
         
         for render_config in render_configs:

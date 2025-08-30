@@ -20,6 +20,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from converter.pipeline import ConversionPipeline
 from converter.steps.markdown_conversion_step import MarkdownConversionStep
+from converter.steps.advanced_markdown_conversion_step import AdvancedMarkdownConversionStep
 
 
 class PDFConverterCLI:
@@ -27,177 +28,281 @@ class PDFConverterCLI:
     
     def __init__(self):
         self.pipeline = ConversionPipeline()
-        self.markdown_step = MarkdownConversionStep()
-    
-    def convert_single(self, pdf_path: str, output_dir: str = None, verbose: bool = False) -> Dict[str, Any]:
-        """Converte um único PDF"""
+        
+    def convert_single(self, pdf_path: str, output_dir: str, verbose: bool = False, 
+                      pt_br: bool = False, book: bool = False, article: bool = False) -> dict:
+        """Converte um único PDF para Markdown"""
         pdf_path = Path(pdf_path)
+        output_dir = Path(output_dir)
         
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF não encontrado: {pdf_path}")
         
+        if not output_dir.exists():
+            output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Configurar fluxo específico baseado nos argumentos
+        self._configure_processing_flow(pt_br, book, article)
+        
         if verbose:
             print(f"🔄 Convertendo: {pdf_path.name}")
-        
-        # Definir diretório de saída
-        if output_dir is None:
-            output_dir = pdf_path.parent
-        else:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(exist_ok=True)
+            print(f"Iniciando conversão de {pdf_path.name}...")
         
         # Executar conversão
         result = self.pipeline.convert(str(pdf_path))
         
-        if result and 'markdown_content' in result:
-            # Salvar arquivo
-            output_file = output_dir / f"{pdf_path.stem}.md"
-            with open(output_file, 'w', encoding='utf-8') as f:
+        # Verificar se é um PDF digitalizado
+        if result.get('is_scanned_pdf', False):
+            if verbose:
+                print(f"⚠️  PDF digitalizado detectado: {pdf_path.name}")
+            
+            # Criar arquivo de aviso
+            warning_filename = pdf_path.stem + '_SCANNED_WARNING.md'
+            warning_path = output_dir / warning_filename
+            
+            with open(warning_path, 'w', encoding='utf-8') as f:
                 f.write(result['markdown_content'])
             
             if verbose:
-                print(f"✅ Conversão concluída: {output_file}")
-                print(f"📊 Tamanho: {len(result['markdown_content']):,} caracteres")
+                print(f"📄 Arquivo de aviso criado: {warning_path}")
             
             return {
-                'success': True,
-                'output_file': str(output_file),
-                'content_length': len(result['markdown_content']),
-                'markdown_content': result['markdown_content']
+                'success': False,
+                'is_scanned_pdf': True,
+                'output_path': str(warning_path),
+                'warning': result['markdown_content'],
+                'statistics': result.get('statistics', {})
             }
-        else:
-            if verbose:
-                print(f"❌ Falha na conversão")
-            return {'success': False, 'error': 'Falha na conversão'}
+        
+        # Salvar arquivo
+        output_filename = pdf_path.stem + '.md'
+        output_path = output_dir / output_filename
+        
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(result['markdown_content'])
+        
+        if verbose:
+            print(f"✅ Conversão concluída: {output_path}")
+            print(f"📊 Tamanho: {len(result['markdown_content']):,} caracteres")
+        
+        return {
+            'success': True,
+            'output_path': str(output_path),
+            'size': len(result['markdown_content']),
+            'statistics': result.get('statistics', {})
+        }
     
-    def convert_batch(self, input_dir: str, output_dir: str = None, verbose: bool = False) -> Dict[str, Any]:
-        """Converte todos os PDFs em um diretório"""
+    def _configure_processing_flow(self, pt_br: bool, book: bool, article: bool):
+        """
+        Configura o fluxo de processamento baseado nos argumentos
+        """
+        # Configurar idioma
+        if pt_br:
+            self.pipeline.set_language('pt-br')
+            print("[CLI] Configurado para processamento em Português do Brasil")
+        else:
+            self.pipeline.set_language('en')
+            print("[CLI] Configurado para processamento em Inglês")
+        
+        # Configurar tipo de conteúdo
+        if book:
+            self.pipeline.set_content_type('book')
+            print("[CLI] Configurado para processamento de livros")
+        elif article:
+            self.pipeline.set_content_type('article')
+            print("[CLI] Configurado para processamento de artigos científicos")
+        else:
+            # Detecção automática baseada no nome do arquivo ou conteúdo
+            self.pipeline.set_content_type('auto')
+            print("[CLI] Detecção automática do tipo de conteúdo")
+    
+    def convert_batch(self, input_dir: str, output_dir: str, verbose: bool = False,
+                     pt_br: bool = False, book: bool = False, article: bool = False) -> dict:
+        """Converte múltiplos PDFs para Markdown"""
         input_path = Path(input_dir)
+        output_path = Path(output_dir)
+        
         if not input_path.exists():
-            raise FileNotFoundError(f"Diretório não encontrado: {input_dir}")
+            raise FileNotFoundError(f"Diretório não encontrado: {input_path}")
+        
+        if not output_path.exists():
+            output_path.mkdir(parents=True, exist_ok=True)
+        
+        # Configurar fluxo específico
+        self._configure_processing_flow(pt_br, book, article)
         
         pdf_files = list(input_path.glob("*.pdf"))
         if not pdf_files:
-            raise ValueError(f"Nenhum PDF encontrado em: {input_dir}")
+            raise FileNotFoundError(f"Nenhum arquivo PDF encontrado em {input_path}")
         
-        if verbose:
-            print(f"📁 Encontrados {len(pdf_files)} PDFs em {input_dir}")
-        
-        # Definir diretório de saída
-        if output_dir is None:
-            output_dir = input_path
-        else:
-            output_dir = Path(output_dir)
-            output_dir.mkdir(exist_ok=True)
-        
-        results = {
-            'total_files': len(pdf_files),
-            'successful': 0,
-            'failed': 0,
-            'files': {}
-        }
-        
-        start_time = time.time()
+        results = []
+        total_size = 0
         
         for i, pdf_file in enumerate(pdf_files, 1):
             if verbose:
-                print(f"\n[{i}/{len(pdf_files)}] 🔄 {pdf_file.name}")
+                print(f"\n🔄 Processando {i}/{len(pdf_files)}: {pdf_file.name}")
             
             try:
-                result = self.convert_single(str(pdf_file), str(output_dir), verbose=False)
-                if result['success']:
-                    results['successful'] += 1
-                    results['files'][pdf_file.name] = {
-                        'status': 'success',
-                        'output_file': result['output_file'],
-                        'content_length': result['content_length']
-                    }
-                else:
-                    results['failed'] += 1
-                    results['files'][pdf_file.name] = {
-                        'status': 'failed',
-                        'error': result.get('error', 'Unknown error')
-                    }
-            except Exception as e:
-                results['failed'] += 1
-                results['files'][pdf_file.name] = {
-                    'status': 'failed',
-                    'error': str(e)
-                }
-                if verbose:
-                    print(f"❌ Erro: {e}")
-        
-        elapsed_time = time.time() - start_time
-        
-        if verbose:
-            print(f"\n📊 RESULTADOS:")
-            print(f"   ✅ Sucessos: {results['successful']}")
-            print(f"   ❌ Falhas: {results['failed']}")
-            print(f"   ⏱️  Tempo total: {elapsed_time:.1f}s")
-            print(f"   📁 Arquivos salvos em: {output_dir}")
-        
-        results['elapsed_time'] = elapsed_time
-        return results
-    
-    def test_title_detection(self, test_cases: List[str] = None, verbose: bool = False) -> Dict[str, Any]:
-        """Testa o algoritmo de detecção de títulos"""
-        if test_cases is None:
-            # Casos de teste padrão
-            test_cases = [
-                # Títulos válidos
-                "Abstract", "Introduction", "Methods", "Results", "Discussion", "Conclusion",
-                "1. Introduction", "2. Methods and Materials", "3. Results and Analysis",
-                "A Refined Baramin Concept", "Accelerated Decay: Theoretical Models",
-                "The Genesis Flood", "Catastrophic Plate Tectonics",
+                result = self.convert_single(str(pdf_file), str(output_path), verbose)
                 
-                # Casos problemáticos (devem ser rejeitados)
-                "do", "da", "de", "Davi", "Saul", "Daniel", "Ezequiel", "Jeremias",
-                "OPBSG", "Number Three Occasional Papers", "Baraminology Study Group",
-                "All Rights Reserved", "Cronologia Bíblica", "Bill Jones",
-                "O que vamos estudar hoje", "Qual o principal", "Montando o quebra cabeça",
-                "Ordens dadas por Deus", "Tentação (def.):", "O desejo de satisfazer",
-                "Ouvindo o homem", "passos do Senhor Deus", "jardim quando soprava",
-                "dia", "Quando soprava a brisa", "entardecer, o homem",
-                "ouviram o SENHOR Deus", "pelo jardim e se esconderam",
-                "A aliança Adâmica:", "Farei que haja inimizade",
-                "entre você e a mulher", "entre a sua descendência", "o descendente"
-            ]
+                if result.get('is_scanned_pdf', False):
+                    results.append({
+                        'file': pdf_file.name,
+                        'success': False,
+                        'is_scanned_pdf': True,
+                        'warning': result.get('warning', 'PDF digitalizado detectado')
+                    })
+                else:
+                    results.append({
+                        'file': pdf_file.name,
+                        'success': True,
+                        'size': result['size']
+                    })
+                    total_size += result['size']
+                
+            except Exception as e:
+                if verbose:
+                    print(f"❌ Erro ao processar {pdf_file.name}: {e}")
+                results.append({
+                    'file': pdf_file.name,
+                    'success': False,
+                    'error': str(e)
+                })
         
-        results = {
-            'total_tests': len(test_cases),
-            'valid_titles': [],
-            'rejected_titles': [],
-            'accuracy': 0.0
+        return {
+            'total_files': len(pdf_files),
+            'successful': sum(1 for r in results if r['success']),
+            'failed': sum(1 for r in results if not r['success']),
+            'total_size': total_size,
+            'results': results
+        }
+    
+    def analyze_conversion(self, output_dir: str) -> dict:
+        """Analisa os resultados da conversão"""
+        output_path = Path(output_dir)
+        
+        if not output_path.exists():
+            raise FileNotFoundError(f"Diretório não encontrado: {output_path}")
+        
+        md_files = list(output_path.glob("*.md"))
+        
+        analysis = {
+            'total_files': len(md_files),
+            'total_size': 0,
+            'avg_size': 0,
+            'size_distribution': {
+                'small': 0,    # < 10KB
+                'medium': 0,   # 10KB - 100KB
+                'large': 0,    # 100KB - 1MB
+                'xlarge': 0    # > 1MB
+            },
+            'files': []
         }
         
-        if verbose:
-            print("🔍 TESTE DE DETECÇÃO DE TÍTULOS")
-            print("=" * 60)
-        
-        for case in test_cases:
-            is_title = self.markdown_step._is_title(case)
+        for md_file in md_files:
+            size = md_file.stat().st_size
+            analysis['total_size'] += size
+            analysis['files'].append({
+                'name': md_file.name,
+                'size': size,
+                'size_kb': size / 1024
+            })
             
-            if is_title:
-                results['valid_titles'].append(case)
-                if verbose:
-                    print(f"✅ TÍTULO: '{case}'")
+            # Categorizar por tamanho
+            if size < 10 * 1024:
+                analysis['size_distribution']['small'] += 1
+            elif size < 100 * 1024:
+                analysis['size_distribution']['medium'] += 1
+            elif size < 1024 * 1024:
+                analysis['size_distribution']['large'] += 1
             else:
-                results['rejected_titles'].append(case)
-                if verbose:
-                    print(f"❌ REJEITADO: '{case}'")
+                analysis['size_distribution']['xlarge'] += 1
         
-        # Calcular acurácia (assumindo que os primeiros 12 são válidos e o resto são problemáticos)
-        expected_valid = 12
-        actual_valid = len(results['valid_titles'])
-        results['accuracy'] = (actual_valid / expected_valid) * 100 if expected_valid > 0 else 0
+        if analysis['total_files'] > 0:
+            analysis['avg_size'] = analysis['total_size'] / analysis['total_files']
         
-        if verbose:
-            print(f"\n📊 RESULTADOS:")
-            print(f"   Títulos detectados: {len(results['valid_titles'])}")
-            print(f"   Títulos rejeitados: {len(results['rejected_titles'])}")
-            print(f"   Acurácia estimada: {results['accuracy']:.1f}%")
+        return analysis
+    
+    def test_title_detection(self, test_cases: list = None) -> dict:
+        """Testa a detecção de títulos"""
+        if test_cases is None:
+            test_cases = [
+                # Casos em inglês
+                ("Abstract", True),
+                ("Introduction", True),
+                ("Methods and Materials", True),
+                ("Results and Discussion", True),
+                ("Conclusion", True),
+                ("References", True),
+                ("This study examines", False),
+                ("We found that", False),
+                ("The analysis shows", False),
+                ("In conclusion", False),
+                
+                # Casos em português
+                ("Resumo", True),
+                ("Introdução", True),
+                ("Métodos e Materiais", True),
+                ("Resultados e Discussão", True),
+                ("Conclusão", True),
+                ("Referências", True),
+                ("Este estudo examina", False),
+                ("Encontramos que", False),
+                ("A análise mostra", False),
+                ("Em conclusão", False),
+                
+                # Casos de livros
+                ("Capítulo 1", True),
+                ("1. Introdução", True),
+                ("I. Fundamentos", True),
+                ("II. Aplicações", True),
+                ("Apêndice A", True),
+                ("Índice", True),
+                ("Bibliografia", True),
+                
+                # Casos específicos de programação
+                ("Getting Started", True),
+                ("Installation", True),
+                ("Configuration", True),
+                ("API Reference", True),
+                ("Examples", True),
+                ("Troubleshooting", True),
+            ]
         
-        return results
+        converter = MarkdownConversionStep()
+        results = []
+        correct = 0
+        
+        for text, expected in test_cases:
+            # Testar com diferentes configurações
+            for language in ['en', 'pt-br']:
+                for content_type in ['article', 'book']:
+                    converter.language = language
+                    converter.content_type = content_type
+                    
+                    result = converter._is_title(text)
+                    is_correct = result == expected
+                    if is_correct:
+                        correct += 1
+                    
+                    results.append({
+                        'text': text,
+                        'expected': expected,
+                        'actual': result,
+                        'correct': is_correct,
+                        'language': language,
+                        'content_type': content_type
+                    })
+        
+        total_tests = len(results)
+        accuracy = (correct / total_tests) * 100 if total_tests > 0 else 0
+        
+        return {
+            'total_tests': total_tests,
+            'correct': correct,
+            'accuracy': accuracy,
+            'results': results
+        }
     
     def analyze_fidelity(self, pdf_path: str, markdown_content: str) -> Dict[str, Any]:
         """Analisa a fidelidade da conversão"""
@@ -357,62 +462,67 @@ class PDFConverterCLI:
 def main():
     """Função principal do CLI"""
     parser = argparse.ArgumentParser(
-        description="PDF to Markdown Converter - Sistema de Conversão Inteligente",
+        description="Conversor de PDF para Markdown com suporte a múltiplos idiomas e tipos de conteúdo",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-EXEMPLOS DE USO:
+Exemplos de uso:
 
-  # Converter um único PDF
-  python main.py convert single documento.pdf --output ./markdown/ --verbose
+  # Converter artigo científico em inglês (padrão)
+  ./pdf2md convert single "article.pdf" --output "./output/"
 
-  # Converter todos os PDFs de um diretório
-  python main.py convert batch ./pdfs/ --output ./markdown/ --verbose
+  # Converter livro em português
+  ./pdf2md convert single "livro.pdf" --output "./output/" --pt-br --book
 
-  # Processar com análise crítica de fidelidade
-  python main.py analyze ./pdfs/ --output ./markdown/ --verbose
+  # Converter artigo científico em português
+  ./pdf2md convert single "artigo.pdf" --output "./output/" --pt-br --article
 
-  # Testar algoritmo de detecção de títulos
-  python main.py test titles --verbose
+  # Converter múltiplos livros em inglês
+  ./pdf2md convert batch "./books/" --output "./output/" --book
 
-  # Testar com casos específicos
-  python main.py test titles --cases "Abstract,Introduction,Methods,do,da,de" --verbose
+  # Analisar resultados
+  ./pdf2md analyze "./output/"
+
+  # Testar detecção de títulos
+  ./pdf2md test titles
         """
     )
     
     subparsers = parser.add_subparsers(dest='command', help='Comandos disponíveis')
     
     # Comando convert
-    convert_parser = subparsers.add_parser('convert', help='Converter PDFs')
+    convert_parser = subparsers.add_parser('convert', help='Converter PDFs para Markdown')
     convert_subparsers = convert_parser.add_subparsers(dest='convert_type', help='Tipo de conversão')
     
     # Convert single
     single_parser = convert_subparsers.add_parser('single', help='Converter um único PDF')
-    single_parser.add_argument('pdf_path', help='Caminho para o PDF')
-    single_parser.add_argument('--output', '-o', help='Diretório de saída')
+    single_parser.add_argument('pdf_path', help='Caminho para o arquivo PDF')
+    single_parser.add_argument('--output', '-o', required=True, help='Diretório de saída')
     single_parser.add_argument('--verbose', '-v', action='store_true', help='Modo verboso')
+    single_parser.add_argument('--pt-br', action='store_true', help='Processar em Português do Brasil')
+    single_parser.add_argument('--book', action='store_true', help='Processar como livro')
+    single_parser.add_argument('--article', action='store_true', help='Processar como artigo científico')
     
     # Convert batch
-    batch_parser = convert_subparsers.add_parser('batch', help='Converter todos os PDFs de um diretório')
+    batch_parser = convert_subparsers.add_parser('batch', help='Converter múltiplos PDFs')
     batch_parser.add_argument('input_dir', help='Diretório com PDFs')
-    batch_parser.add_argument('--output', '-o', help='Diretório de saída')
+    batch_parser.add_argument('--output', '-o', required=True, help='Diretório de saída')
     batch_parser.add_argument('--verbose', '-v', action='store_true', help='Modo verboso')
+    batch_parser.add_argument('--pt-br', action='store_true', help='Processar em Português do Brasil')
+    batch_parser.add_argument('--book', action='store_true', help='Processar como livros')
+    batch_parser.add_argument('--article', action='store_true', help='Processar como artigos científicos')
     
     # Comando analyze
-    analyze_parser = subparsers.add_parser('analyze', help='Processar com análise crítica')
-    analyze_parser.add_argument('input_dir', help='Diretório com PDFs')
-    analyze_parser.add_argument('--output', '-o', help='Diretório de saída')
-    analyze_parser.add_argument('--verbose', '-v', action='store_true', help='Modo verboso')
-    analyze_parser.add_argument('--report', '-r', help='Arquivo de relatório JSON')
+    analyze_parser = subparsers.add_parser('analyze', help='Analisar resultados da conversão')
+    analyze_parser.add_argument('output_dir', help='Diretório com arquivos Markdown')
+    analyze_parser.add_argument('--json', action='store_true', help='Saída em formato JSON')
     
     # Comando test
-    test_parser = subparsers.add_parser('test', help='Testes e validações')
+    test_parser = subparsers.add_parser('test', help='Testar funcionalidades')
     test_subparsers = test_parser.add_subparsers(dest='test_type', help='Tipo de teste')
     
     # Test titles
     titles_parser = test_subparsers.add_parser('titles', help='Testar detecção de títulos')
-    titles_parser.add_argument('--cases', help='Casos de teste separados por vírgula')
-    titles_parser.add_argument('--verbose', '-v', action='store_true', help='Modo verboso')
-    titles_parser.add_argument('--output', '-o', help='Arquivo de resultado JSON')
+    titles_parser.add_argument('--json', action='store_true', help='Saída em formato JSON')
     
     args = parser.parse_args()
     
@@ -425,45 +535,69 @@ EXEMPLOS DE USO:
     try:
         if args.command == 'convert':
             if args.convert_type == 'single':
-                result = cli.convert_single(args.pdf_path, args.output, args.verbose)
-                if args.verbose and result['success']:
-                    print(f"✅ Conversão concluída com sucesso!")
-            
+                result = cli.convert_single(
+                    args.pdf_path, 
+                    args.output, 
+                    args.verbose,
+                    args.pt_br,
+                    args.book,
+                    args.article
+                )
+                print("✅ Conversão concluída com sucesso!")
+                
             elif args.convert_type == 'batch':
-                result = cli.convert_batch(args.input_dir, args.output, args.verbose)
-                if args.verbose:
-                    print(f"✅ Processamento em lote concluído!")
+                result = cli.convert_batch(
+                    args.input_dir,
+                    args.output,
+                    args.verbose,
+                    args.pt_br,
+                    args.book,
+                    args.article
+                )
+                print(f"✅ Conversão em lote concluída!")
+                print(f"📊 Total: {result['total_files']} arquivos")
+                print(f"✅ Sucessos: {result['successful']}")
+                print(f"❌ Falhas: {result['failed']}")
+                print(f"📏 Tamanho total: {result['total_size']:,} caracteres")
         
         elif args.command == 'analyze':
-            result = cli.process_with_analysis(args.input_dir, args.output, args.verbose)
+            result = cli.analyze_conversion(args.output_dir)
             
-            # Salvar relatório se solicitado
-            if args.report:
-                with open(args.report, 'w', encoding='utf-8') as f:
-                    json.dump(result, f, indent=2, ensure_ascii=False)
-                print(f"📄 Relatório salvo: {args.report}")
+            if args.json:
+                print(json.dumps(result, indent=2, ensure_ascii=False))
+            else:
+                print(f"📊 Análise de {result['total_files']} arquivos:")
+                print(f"📏 Tamanho total: {result['total_size']:,} bytes")
+                print(f"📏 Tamanho médio: {result['avg_size']:,.0f} bytes")
+                print("\n📈 Distribuição por tamanho:")
+                for category, count in result['size_distribution'].items():
+                    print(f"  {category.capitalize()}: {count} arquivos")
         
         elif args.command == 'test':
             if args.test_type == 'titles':
-                test_cases = None
-                if args.cases:
-                    test_cases = [case.strip() for case in args.cases.split(',')]
+                result = cli.test_title_detection()
                 
-                result = cli.test_title_detection(test_cases, args.verbose)
-                
-                # Salvar resultado se solicitado
-                if args.output:
-                    with open(args.output, 'w', encoding='utf-8') as f:
-                        json.dump(result, f, indent=2, ensure_ascii=False)
-                    print(f"📄 Resultado salvo: {args.output}")
+                if args.json:
+                    print(json.dumps(result, indent=2, ensure_ascii=False))
+                else:
+                    print(f"🎯 Teste de Detecção de Títulos:")
+                    print(f"📊 Total de testes: {result['total_tests']}")
+                    print(f"✅ Corretos: {result['correct']}")
+                    print(f"📈 Acurácia: {result['accuracy']:.1f}%")
+                    
+                    # Mostrar alguns resultados incorretos
+                    incorrect = [r for r in result['results'] if not r['correct']]
+                    if incorrect:
+                        print(f"\n❌ Exemplos de falhas:")
+                        for i, r in enumerate(incorrect[:5]):
+                            print(f"  {i+1}. '{r['text']}' - Esperado: {r['expected']}, Obtido: {r['actual']}")
     
     except Exception as e:
-        print(f"❌ ERRO: {str(e)}")
+        print(f"❌ ERRO: {e}")
         if args.verbose:
             import traceback
             traceback.print_exc()
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

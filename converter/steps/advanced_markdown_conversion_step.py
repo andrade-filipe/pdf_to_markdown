@@ -594,5 +594,67 @@ class AdvancedMarkdownConversionStep(BaseStep):
         if re.match(r'^[-•*]\s', current_line) or re.match(r'^\d+\.\s', current_line):
             return False
         
+        # NÃO JUNTAR se a linha atual parece ser um título ou cabeçalho
+        if self._looks_like_title(current_line):
+            return False
+        
+        # NÃO JUNTAR se a linha anterior parece ser um título
+        if self._looks_like_title(prev_line):
+            return False
+        
+        # NÃO JUNTAR se há mudança de contexto (palavras-chave específicas)
+        if self._context_break(prev_line, current_line):
+            return False
+        
         # Juntar se as linhas são relacionadas
         return True
+    
+    def _looks_like_title(self, line: str) -> bool:
+        """Verifica se uma linha parece ser um título"""
+        line = line.strip()
+        
+        # Linhas muito curtas em maiúsculas
+        if len(line) < 50 and line.isupper():
+            return True
+        
+        # Linhas que começam com palavras-chave de título
+        title_keywords = [
+            'chapter', 'capítulo', 'section', 'seção', 'part', 'parte',
+            'introduction', 'introdução', 'conclusion', 'conclusão',
+            'abstract', 'resumo', 'summary', 'sumário', 'appendix', 'apêndice'
+        ]
+        
+        line_lower = line.lower()
+        for keyword in title_keywords:
+            if line_lower.startswith(keyword):
+                return True
+        
+        # Linhas que terminam com números (ex: "Chapter 1", "Part 2")
+        if re.match(r'^[A-Z][a-z\s]+\d+$', line):
+            return True
+        
+        return False
+    
+    def _context_break(self, prev_line: str, current_line: str) -> bool:
+        """Verifica se há quebra de contexto entre duas linhas"""
+        # Palavras que indicam mudança de contexto
+        context_breakers = [
+            'however', 'however', 'nevertheless', 'nevertheless',
+            'therefore', 'therefore', 'thus', 'assim',
+            'furthermore', 'furthermore', 'moreover', 'além disso',
+            'in addition', 'in addition', 'additionally', 'adicionalmente',
+            'on the other hand', 'on the other hand', 'por outro lado',
+            'first', 'first', 'second', 'second', 'third', 'third',
+            'primeiro', 'primeiro', 'segundo', 'segundo', 'terceiro', 'terceiro',
+            'finally', 'finally', 'finally', 'finalmente',
+            'in conclusion', 'in conclusion', 'em conclusão',
+            'for example', 'for example', 'por exemplo',
+            'specifically', 'specifically', 'especificamente'
+        ]
+        
+        current_lower = current_line.lower()
+        for breaker in context_breakers:
+            if breaker in current_lower:
+                return True
+        
+        return False
